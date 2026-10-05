@@ -3,8 +3,11 @@
 // État de l'application partagé entre la boucle principale (main.cpp) et le
 // panneau de contrôle (ui.cpp).
 
+#include "star.hpp"
+
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 
 struct Vec3 {
     float x, y, z;
@@ -104,4 +107,47 @@ struct App {
     float massSolar = 10.0f;
 
     bool showUi = true;
+
+    // Mode étoile : au lieu du trou noir, on simule l'étoile `star`.
+    bool starMode = false;
+    int starIndex = 0;          // dans starPresets(), -1 = séquence principale
+    Star star = starPresets()[0];
 };
+
+// Distance de caméra par défaut : en rayons de Schwarzschild pour le trou
+// noir, en rayons de l'étoile pour une étoile.
+constexpr float kBlackHoleDistance = 22.0f;
+constexpr float kStarDistance = 4.0f;
+
+inline void setStarMode(App& app, bool on)
+{
+    if (app.starMode == on) return;
+    app.starMode = on;
+    app.camera.targetDistance = on ? kStarDistance : kBlackHoleDistance;
+}
+
+// Recentre la caméra (distance adaptée au trou noir ou à l'étoile).
+inline void resetCamera(App& app)
+{
+    bool autoOrbit = app.camera.autoOrbit;
+    app.camera = OrbitCamera{};
+    app.camera.autoOrbit = autoOrbit;
+    if (app.starMode)
+        app.camera.distance = app.camera.targetDistance = kStarDistance;
+}
+
+inline void selectPreset(App& app, int index)
+{
+    const auto& presets = starPresets();
+    int n = int(presets.size());
+    app.starIndex = ((index % n) + n) % n;
+    app.star = presets[app.starIndex];
+    std::cout << app.star.summary() << "\n";
+}
+
+inline void selectMainSequence(App& app, double mass)
+{
+    app.starIndex = -1;
+    app.star = mainSequenceStar(mass);
+    std::cout << app.star.summary() << "\n";
+}

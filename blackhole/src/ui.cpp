@@ -70,8 +70,12 @@ void simulationSection(App& app)
          "Touches + et - pour accélérer ou ralentir.");
 
     char real[32];
-    formatDuration(app.simTime * kSunRsOverCSeconds * app.massSolar, real, sizeof(real));
-    ImGui::Text("Temps écoulé : %.0f rs/c  (%s pour ce trou noir)", app.simTime, real);
+    if (app.starMode) {
+        ImGui::Text("Temps écoulé : %.0f s", app.simTime / 10.0);
+    } else {
+        formatDuration(app.simTime * kSunRsOverCSeconds * app.massSolar, real, sizeof(real));
+        ImGui::Text("Temps écoulé : %.0f rs/c  (%s pour ce trou noir)", app.simTime, real);
+    }
     if (ImGui::Button("Revenir à t = 0"))
         app.simTime = 0.0;
 }
@@ -80,7 +84,7 @@ void blackHoleSection(App& app)
 {
     if (!ImGui::CollapsingHeader("Trou noir", ImGuiTreeNodeFlags_DefaultOpen)) return;
 
-    ImGui::SliderFloat("Masse (soleils)", &app.massSolar, 1.0f, 1.0e10f, "%.3g",
+    ImGui::SliderFloat("Masse", &app.massSolar, 1.0f, 1.0e10f, "%.3g x Soleil",
                        ImGuiSliderFlags_Logarithmic);
     help("Toute la simulation est calculée en rayons de Schwarzschild (rs) : "
          "l'image est la même pour toutes les masses. La masse fixe l'échelle "
@@ -134,13 +138,121 @@ void diskSection(App& app)
         disk = DiskSettings{};
 }
 
+// Couleur approchée d'un corps noir (même formule que blackbody() du shader).
+ImVec4 blackbodyColor(double temperature)
+{
+    double t = std::clamp(temperature, 1000.0, 40000.0) / 100.0;
+    auto c01 = [](double v) { return float(std::clamp(v, 0.0, 1.0)); };
+    float r = t <= 66.0 ? 1.0f : c01(1.29293618 * std::pow(t - 60.0, -0.1332047592));
+    float g = t <= 66.0 ? c01(0.39008157 * std::log(t) - 0.63184144)
+                        : c01(1.12989086 * std::pow(t - 60.0, -0.0755148492));
+    float b = t >= 66.0 ? 1.0f : (t <= 19.0 ? 0.0f : c01(0.54320678 * std::log(t - 10.0) - 1.19625408));
+    return ImVec4(r, g, b, 1.0f);
+}
+
+bool sliderDouble(const char* label, double* v, double lo, double hi, const char* fmt, bool log = false)
+{
+    return ImGui::SliderScalar(label, ImGuiDataType_Double, v, &lo, &hi, fmt,
+                               log ? ImGuiSliderFlags_Logarithmic : ImGuiSliderFlags_None);
+}
+
+void sceneSection(App& app)
+{
+    int scene = app.starMode ? 1 : 0;
+    ImGui::TextUnformatted("Scène :");
+    ImGui::SameLine();
+    bool changed = ImGui::RadioButton("Trou noir", &scene, 0);
+    ImGui::SameLine();
+    changed |= ImGui::RadioButton("Étoile (E)", &scene, 1);
+    if (changed)
+        setStarMode(app, scene == 1);
+}
+
+void starSection(App& app)
+{
+    if (!ImGui::CollapsingHeader("Étoile", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    Star& star = app.star;
+    const auto& presets = starPresets();
+
+    // Étoiles réelles (paramètres mesurés).
+    const char* current = app.starIndex >= 0 ? presets[app.starIndex].name.c_str() : "Sur mesure";
+    if (ImGui::BeginCombo("Étoile connue (N / B)", current)) {
+        for (int i = 0; i < int(presets.size()); ++i) {
+            if (ImGui::Selectable(presets[i].name.c_str(), i == app.starIndex))
+                selectPreset(app, i);
+            if (ImGui::IsItemHovered())
+                ImGui::SetItemTooltip("%s", presets[i].kind.c_str());
+        }
+        ImGui::EndCombo();
+    }
+
+    // Créer une étoile à partir de sa seule masse.
+    ImGui::SeparatorText("Créer une étoile");
+    static int family = 0;          // 0 = séquence principale, 1 = naine blanche
+    static double msMass = 1.0;
+    static double wdMass = 0.6, wdTemp = 20000.0;
+    ImGui::RadioButton("Séquence principale", &family, 0);
+    ImGui::SameLine();
+    ImGui::RadioButton("Naine blanche", &family, 1);
+    if (family == 0) {
+        if (sliderDouble("Masse##ms", &msMass, 0.08, 100.0, "%.3g x Soleil", true))
+            selectMainSequence(app, msMass);
+        help("Étoile qui brûle son hydrogène, comme le Soleil. La masse suffit : "
+             "la relation masse-luminosité (L ~ M^3,5 à M^4) et la relation "
+             "masse-rayon donnent L et R, puis Stefan-Boltzmann donne la "
+             "température. 0,1 soleil : naine rouge. 20 soleils : étoile bleue.");
+    } else {
+        bool c = sliderDouble("Masse##wd", &wdMass, 0.2, 1.42, "%.3g x Soleil");
+        c |= sliderDouble("Température##wd", &wdTemp, 4000.0, 100000.0, "%.0f K", true);
+        if (c) {
+            app.starIndex = -1;
+            star = whiteDwarf(wdMass, wdTemp);
+        }
+        help("Cœur d'étoile éteinte, de la taille de la Terre. Plus elle est "
+             "lourde, plus elle est PETITE (relation de Chandrasekhar) ; "
+             "au-delà de 1,44 soleil elle s'effondre.");
+    }
+
+    // Réglage libre de chaque grandeur.
+    ImGui::SeparatorText("Réglages fins");
+    bool edited = false;
+    edited |= sliderDouble("Masse", &star.mass, 0.05, 150.0, "%.3g x Soleil", true);
+    edited |= sliderDouble("Rayon", &star.radius, 1e-5, 2000.0, "%.3g x Soleil", true);
+    help("En rayons du Soleil (696 000 km). Étoile à neutrons : ~0,00002 ; "
+         "Bételgeuse : ~760.");
+    edited |= sliderDouble("Température", &star.temperature, 2000.0, 1.0e6, "%.0f K", true);
+    edited |= sliderDouble("Rotation", &star.rotationDays, 1e-5, 40000.0, "%.3g jours", true);
+    edited |= sliderDouble("Activité", &star.activity, 0.0, 1.0, "%.2f");
+    help("Taches et éruptions : 0 = étoile calme, 1 = très active.");
+    if (edited && app.starIndex >= 0) {
+        app.starIndex = -1;
+        star.name = "Sur mesure";
+    }
+
+    // Grandeurs déduites par le modèle physique (src/star.cpp).
+    ImGui::SeparatorText("Ce que la physique en déduit");
+    ImGui::ColorButton("##couleur", blackbodyColor(star.temperature),
+                       ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoPicker,
+                       ImVec2(ImGui::GetFontSize() * 1.6f, ImGui::GetFontSize() * 1.6f));
+    ImGui::SameLine();
+    ImGui::Text("%s, classe %s", star.kind.c_str(), star.spectralClass().c_str());
+    ImGui::Text("Luminosité : %.3g fois le Soleil", star.luminosity());
+    help("Stefan-Boltzmann : L = R² (T / 5772 K)^4.");
+    ImGui::Text("Gravité de surface : %.3g fois le Soleil", star.surfaceGravity());
+    ImGui::Text("Compacité rs/R : %.2g", star.compactness());
+    help("Rapport entre le rayon de Schwarzschild de l'étoile et son rayon. "
+         "Quasi nul pour le Soleil (la lumière va tout droit), ~0,35 pour une "
+         "étoile à neutrons : on voit alors une partie de sa face cachée. "
+         "1 = elle devient un trou noir.");
+}
+
 void cameraSection(App& app)
 {
     if (!ImGui::CollapsingHeader("Caméra")) return;
     OrbitCamera& cam = app.camera;
 
-    ImGui::SliderFloat("Distance", &cam.targetDistance, kMinDistance, kMaxDistance, "%.1f rs",
-                       ImGuiSliderFlags_Logarithmic);
+    ImGui::SliderFloat("Distance", &cam.targetDistance, kMinDistance, kMaxDistance,
+                       app.starMode ? "%.1f rayons d'étoile" : "%.1f rs", ImGuiSliderFlags_Logarithmic);
     float yawDeg = std::remainder(cam.yaw, 2.0f * kPi) * kRad2Deg;
     if (ImGui::SliderFloat("Angle horizontal", &yawDeg, -180.0f, 180.0f, "%.0f°")) {
         cam.yaw = yawDeg / kRad2Deg;
@@ -156,11 +268,8 @@ void cameraSection(App& app)
     if (ImGui::SliderFloat("Champ de vision", &fovDeg, 20.0f, 120.0f, "%.0f°"))
         cam.fovY = fovDeg / kRad2Deg;
     ImGui::Checkbox("Orbite automatique (Espace)", &cam.autoOrbit);
-    if (ImGui::Button("Recentrer (C)")) {
-        bool autoOrbit = cam.autoOrbit;
-        cam = OrbitCamera{};
-        cam.autoOrbit = autoOrbit;
-    }
+    if (ImGui::Button("Recentrer (C)"))
+        resetCamera(app);
 }
 
 void renderSection(App& app, const UiStats& stats)
@@ -195,6 +304,9 @@ void helpSection()
         "+ / - : vitesse du temps\n"
         "H : disque   R : recharger les shaders\n"
         "K / L / O : résolution\n"
+        "E : trou noir / étoile\n"
+        "N / B : étoile suivante / précédente\n"
+        "I / U : étoile plus / moins massive\n"
         "F1 ou Tab : cacher ce panneau\n"
         "Échap : quitter");
 }
@@ -256,9 +368,14 @@ void uiDraw(App& app, const UiStats& stats)
         if (ImGui::Begin("Contrôle de la simulation (F1)", &app.showUi,
                          ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::PushItemWidth(ImGui::GetFontSize() * 13.0f);
+            sceneSection(app);
             simulationSection(app);
-            blackHoleSection(app);
-            diskSection(app);
+            if (app.starMode) {
+                starSection(app);
+            } else {
+                blackHoleSection(app);
+                diskSection(app);
+            }
             cameraSection(app);
             renderSection(app, stats);
             helpSection();
