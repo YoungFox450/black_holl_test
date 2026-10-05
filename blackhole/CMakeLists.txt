@@ -9,22 +9,28 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Type de build" FORCE)
 endif()
 
-# --- GLFW : fenêtre + contexte OpenGL (téléchargé automatiquement) ---------
-include(FetchContent)
-set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
-# Sous Linux on compile seulement le backend X11 (fonctionne aussi sous Wayland
-# via XWayland) : moins de dépendances à installer.
-set(GLFW_BUILD_WAYLAND  OFF CACHE BOOL "Backend Wayland de GLFW")
-FetchContent_Declare(
-    glfw
-    GIT_REPOSITORY https://github.com/glfw/glfw.git
-    GIT_TAG        3.4
-    GIT_SHALLOW    TRUE
-)
-FetchContent_MakeAvailable(glfw)
+# --- GLFW : fenêtre + contexte OpenGL --------------------------------------
+# On utilise la version installée sur le système si elle existe,
+# sinon CMake la télécharge automatiquement depuis GitHub.
+find_package(glfw3 3.3 QUIET)
+if(NOT glfw3_FOUND)
+    message(STATUS "GLFW introuvable sur le système : téléchargement via FetchContent")
+    include(FetchContent)
+    set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
+    # Sous Linux on compile seulement le backend X11 (fonctionne aussi sous
+    # Wayland via XWayland) : moins de dépendances à installer.
+    set(GLFW_BUILD_WAYLAND  OFF CACHE BOOL "Backend Wayland de GLFW")
+    FetchContent_Declare(
+        glfw
+        GIT_REPOSITORY https://github.com/glfw/glfw.git
+        GIT_TAG        3.4
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(glfw)
+endif()
 
 # --- glad : chargeur des fonctions OpenGL 3.3 core (fichiers générés) -------
 add_library(glad STATIC external/glad/src/gl.c)
