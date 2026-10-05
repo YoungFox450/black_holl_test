@@ -173,6 +173,28 @@ cmake --build build --config Release
 ./build/bin/blackhole
 ```
 
+## Panneau de contrôle
+
+Un panneau (Dear ImGui) s'affiche en haut à gauche ; `F1` ou `Tab` le cache.
+Il règle sans raccourci clavier :
+
+![panneau de contrôle](docs/panneau.jpg)
+
+
+- **Simulation** : pause, vitesse du temps, retour à t = 0.
+- **Trou noir** : masse en masses solaires. L'image ne change pas (tout est
+  calculé en rs), mais le panneau convertit en vraies grandeurs : taille de
+  l'horizon, de la sphère de photons, de la dernière orbite stable, durée
+  d'un tour, temps écoulé.
+- **Disque d'accrétion** : rayons intérieur et extérieur, température
+  maximale, luminosité, nombre d'amas chauds, et on peut couper l'effet
+  Doppler ou le décalage gravitationnel pour voir leur rôle.
+- **Caméra** : distance, angles, champ de vision, orbite automatique.
+- **Rendu** : FPS et temps GPU, résolution (auto ou fixe), FPS visé, pas
+  max par rayon, exposition, rechargement des shaders.
+
+Quand la souris est sur le panneau, elle ne fait pas tourner la caméra.
+
 ## Commandes
 
 Les lettres marchent en AZERTY comme en QWERTY.
@@ -193,6 +215,7 @@ Les lettres marchent en AZERTY comme en QWERTY.
 | `E` | passer du trou noir à une étoile, et retour |
 | `N` / `B` | étoile suivante / précédente de la liste |
 | `I` / `U` | étoile de la séquence principale plus / moins massive (×1,25) |
+| `F1` ou `Tab` | afficher / cacher le panneau de contrôle |
 | `Échap` | quitter |
 
 La barre de titre affiche les FPS, la résolution du rendu, la vitesse du

@@ -1,0 +1,141 @@
+#pragma once
+
+// État de l'application partagé entre la boucle principale (main.cpp) et le
+// panneau de contrôle (ui.cpp).
+
+#include <algorithm>
+#include <cmath>
+
+#include "star.hpp"
+
+struct Vec3 {
+    float x, y, z;
+};
+inline Vec3 operator-(Vec3 a) { return {-a.x, -a.y, -a.z}; }
+inline Vec3 cross(Vec3 a, Vec3 b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
+inline Vec3 normalize(Vec3 a)
+{
+    float l = std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+    return {a.x / l, a.y / l, a.z / l};
+}
+
+constexpr float kMinDistance = 2.5f;   // en rayons de Schwarzschild
+constexpr float kMaxDistance = 55.0f;
+constexpr float kMaxPitch = 1.5f;      // ~86°, évite le basculement aux pôles
+
+constexpr float kMinScale = 0.25f;
+constexpr float kMaxScale = 1.0f;
+
+// Caméra en orbite autour du trou noir (placé à l'origine).
+// Les vitesses donnent un mouvement fluide avec inertie.
+struct OrbitCamera {
+    float yaw = 0.0f;
+    float pitch = 0.09f;      // légèrement au-dessus du disque
+    float distance = 22.0f;
+    float targetDistance = 22.0f;
+    float fovY = 1.0f;        // ~57°
+
+    float yawVel = 0.0f;      // rad/s
+    float pitchVel = 0.0f;    // rad/s
+    bool autoOrbit = false;
+
+    Vec3 position() const
+    {
+        return {distance * std::cos(pitch) * std::sin(yaw),
+                distance * std::sin(pitch),
+                distance * std::cos(pitch) * std::cos(yaw)};
+    }
+
+    void update(float dt, bool dragging)
+    {
+        if (!dragging) {
+            yaw += yawVel * dt;
+            pitch += pitchVel * dt;
+            float damping = std::exp(-3.0f * dt);
+            yawVel *= damping;
+            pitchVel *= damping;
+        }
+        if (autoOrbit)
+            yaw += 0.12f * dt;
+        if (pitch > kMaxPitch || pitch < -kMaxPitch) {
+            pitch = std::clamp(pitch, -kMaxPitch, kMaxPitch);
+            pitchVel = 0.0f;
+        }
+        // Zoom lissé.
+        distance += (targetDistance - distance) * (1.0f - std::exp(-8.0f * dt));
+    }
+};
+
+// Réglages du disque d'accrétion (envoyés au shader comme uniforms).
+struct DiskSettings {
+    float innerRadius = 3.0f;     // en rs ; 3 rs = ISCO, dernière orbite stable
+    float outerRadius = 12.0f;
+    float maxTemperature = 4500.0f; // K
+    float brightness = 1.6f;
+    int clumpCount = 14;          // amas de gaz chaud (32 au plus)
+    bool doppler = true;          // effet Doppler relativiste
+    bool gravitationalShift = true; // décalage gravitationnel vers le rouge
+};
+
+struct App {
+    OrbitCamera camera;
+    bool dragging = false;
+    double lastX = 0.0, lastY = 0.0;
+    double lastMoveTime = 0.0;
+    bool showDisk = true;
+    bool reloadRequested = false;
+
+    // Temps de simulation en unités rs/c. simSpeed = unités par seconde réelle.
+    double simTime = 0.0;
+    float simSpeed = 10.0f;
+    bool paused = false;
+
+    float renderScale = 0.5f;   // fraction de la taille de la fenêtre
+    bool autoScale = true;
+    float targetFps = 30.0f;    // FPS visé par la résolution automatique
+    // Nombre max de pas par rayon : garde-fou. Avec le pas proportionnel à r, un
+    // rayon qui s'échappe en prend ~20 et un tour de la sphère de photons ~30.
+    int maxSteps = 200;
+    float exposure = 1.0f;
+
+    DiskSettings disk;
+
+    // Masse du trou noir en masses solaires. Les calculs sont faits en unités
+    // de rs : la masse ne change pas l'image, seulement la conversion vers
+    // les kilomètres et les secondes affichée dans le panneau.
+    float massSolar = 10.0f;
+
+    bool showUi = true;
+
+    // Mode étoile : au lieu du trou noir, on simule l'étoile `star`
+    // (modèle physique dans star.cpp, rendu par shaders/star.frag).
+    bool starMode = false;
+    int starIndex = 0;          // dans starPresets(), -1 = séquence principale
+    Star star = starPresets()[0];
+};
+
+// Distance de caméra par défaut : en rayons de Schwarzschild pour le trou
+// noir, en rayons de l'étoile pour une étoile.
+constexpr float kBlackHoleDistance = 22.0f;
+constexpr float kStarDistance = 4.0f;
+
+inline void setStarMode(App& app, bool on)
+{
+    if (app.starMode == on) return;
+    app.starMode = on;
+    app.camera.targetDistance = on ? kStarDistance : kBlackHoleDistance;
+}
+
+inline void selectPreset(App& app, int index)
+{
+    const auto& presets = starPresets();
+    int n = int(presets.size());
+    app.starIndex = ((index % n) + n) % n;
+    app.star = presets[app.starIndex];
+}
+
+inline void selectMainSequence(App& app, double mass)
+{
+    app.starIndex = -1;
+    app.star = mainSequenceStar(mass);
+}
