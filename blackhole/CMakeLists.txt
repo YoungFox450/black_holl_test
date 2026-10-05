@@ -40,6 +40,7 @@ target_include_directories(glad PUBLIC external/glad/include)
 add_executable(blackhole
     src/main.cpp
     src/shader.cpp
+    src/star.cpp
 )
 target_link_libraries(blackhole PRIVATE glfw glad)
 

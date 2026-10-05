@@ -24,6 +24,9 @@
 //   K / L                   : baisser / augmenter la résolution du rendu
 //   O                       : résolution automatique (activée au départ)
 //   R                       : recharger les shaders (après modification)
+//   E                       : passer du trou noir à une étoile (et retour)
+//   N / B                   : étoile suivante / précédente (Soleil, Bételgeuse...)
+//   I / U                   : étoile de la séquence principale plus / moins massive
 //   Échap                   : quitter
 //
 // Options :
@@ -34,11 +37,14 @@
 //                [--no-disk] [--time T] [--yaw A] [--pitch A] [--distance D]
 //                   : rend une seule image hors écran puis quitte
 //   --bench N       : rend N images hors écran et affiche le temps moyen
+//   --star N        : affiche l'étoile n° N de la liste (0 = Soleil)
+//   --mass M        : affiche une étoile de la séquence principale de M masses solaires
 
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
 
 #include "shader.hpp"
+#include "star.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -128,13 +134,46 @@ struct App {
 
     float renderScale = 0.5f;   // fraction de la taille de la fenêtre
     bool autoScale = true;
+
+    // Mode étoile : au lieu du trou noir, on simule l'étoile `star`.
+    bool starMode = false;
+    int starIndex = 0;          // dans starPresets(), -1 = séquence principale
+    Star star = starPresets()[0];
 };
+
+// Distance de caméra par défaut : en rayons de Schwarzschild pour le trou
+// noir, en rayons de l'étoile pour une étoile.
+constexpr float kBlackHoleDistance = 22.0f;
+constexpr float kStarDistance = 4.0f;
+
+void setStarMode(App& app, bool on)
+{
+    if (app.starMode == on) return;
+    app.starMode = on;
+    app.camera.targetDistance = on ? kStarDistance : kBlackHoleDistance;
+}
+
+void selectPreset(App& app, int index)
+{
+    const auto& presets = starPresets();
+    int n = int(presets.size());
+    app.starIndex = ((index % n) + n) % n;
+    app.star = presets[app.starIndex];
+    std::cout << app.star.summary() << "\n";
+}
+
+void selectMainSequence(App& app, double mass)
+{
+    app.starIndex = -1;
+    app.star = mainSequenceStar(mass);
+    std::cout << app.star.summary() << "\n";
+}
 
 std::string shaderDir = BH_SHADER_DIR;
 
 // Les trois programmes et leurs uniforms (cherchés une seule fois).
 struct Programs {
-    GLuint sky = 0, trace = 0, present = 0;
+    GLuint sky = 0, trace = 0, present = 0, star = 0;
 
     GLint skyFace = -1, skyFaceSize = -1;
     GLint resolution = -1, time = -1, camPos = -1, camRight = -1, camUp = -1,
@@ -146,7 +185,8 @@ struct Programs {
         glDeleteProgram(sky);
         glDeleteProgram(trace);
         glDeleteProgram(present);
-        sky = trace = present = 0;
+        glDeleteProgram(star);
+        sky = trace = present = star = 0;
     }
 };
 
@@ -158,7 +198,8 @@ bool buildPrograms(Programs& out)
     p.sky = loadShaderProgram({vert}, {noise, shaderDir + "/sky.frag"});
     p.trace = loadShaderProgram({vert}, {noise, shaderDir + "/blackhole.frag"});
     p.present = loadShaderProgram({vert}, {shaderDir + "/present.frag"});
-    if (!p.sky || !p.trace || !p.present) {
+    p.star = loadShaderProgram({vert}, {noise, shaderDir + "/star.frag"});
+    if (!p.sky || !p.trace || !p.present || !p.star) {
         p.destroy();
         return false;
     }
@@ -293,6 +334,56 @@ void traceFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarg
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
+// Passe 2 bis : ray tracing d'une étoile (shaders/star.frag). Les paramètres
+// du shader viennent du modèle physique de l'étoile (src/star.cpp).
+void traceStarFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarget& target,
+                    const OrbitCamera& cam, float seconds, const Star& star)
+{
+    Vec3 pos = cam.position();
+    Vec3 forward = normalize(-pos);
+    Vec3 right = normalize(cross(forward, {0.0f, 1.0f, 0.0f}));
+    Vec3 up = cross(right, forward);
+    GLuint p = prog.star;
+    auto loc = [p](const char* name) { return glGetUniformLocation(p, name); };
+
+    // Rotation affichée : un tour toutes les "rotationDays * 2" secondes
+    // (Soleil : ~50 s), bornée pour les objets qui tournent très vite.
+    float rotSpeed = std::min(float(6.2831853 / (star.rotationDays * 2.0)), 3.0f);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, target.fbo);
+    glViewport(0, 0, target.width, target.height);
+    glUseProgram(p);
+    glUniform2f(loc("uResolution"), float(target.width), float(target.height));
+    glUniform1f(loc("uTime"), seconds);
+    glUniform3f(loc("uCamPos"), pos.x, pos.y, pos.z);
+    glUniform3f(loc("uCamRight"), right.x, right.y, right.z);
+    glUniform3f(loc("uCamUp"), up.x, up.y, up.z);
+    glUniform3f(loc("uCamForward"), forward.x, forward.y, forward.z);
+    glUniform1f(loc("uFovY"), cam.fovY);
+    glUniform1i(loc("uMaxSteps"), kMaxSteps);
+    glUniform1f(loc("uStarTemp"), float(star.temperature));
+    glUniform1f(loc("uCompact"), float(star.compactness()));
+    glUniform1f(loc("uLimb"), float(star.limbDarkening()));
+    glUniform1f(loc("uGranScale"), float(star.granulationScale()));
+    glUniform1f(loc("uActivity"), float(star.activity));
+    glUniform1f(loc("uRotSpeed"), rotSpeed);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, skyTex);
+    glUniform1i(loc("uSky"), 0);
+    glBindVertexArray(vao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+}
+
+// Trou noir ou étoile, selon le mode.
+void traceScene(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarget& target,
+                const App& app, double simTime)
+{
+    if (app.starMode)
+        traceStarFrame(prog, vao, skyTex, target, app.camera, float(simTime / 10.0), app.star);
+    else
+        traceFrame(prog, vao, skyTex, target, app.camera, float(simTime), app.showDisk);
+}
+
 // Passe 3 : agrandissement + tone mapping vers outFbo (0 = la fenêtre).
 void presentFrame(const Programs& prog, GLuint vao, const TraceTarget& target, GLuint outFbo,
                   int outW, int outH)
@@ -391,6 +482,26 @@ void onChar(GLFWwindow* window, unsigned int c)
         app->autoScale = false;
         app->renderScale = std::min(kMaxScale, app->renderScale + 0.05f);
         break;
+    case 'e': case 'E':
+        setStarMode(*app, !app->starMode);
+        if (app->starMode) std::cout << app->star.summary() << "\n";
+        break;
+    case 'n': case 'N':
+        setStarMode(*app, true);
+        selectPreset(*app, app->starIndex + 1);
+        break;
+    case 'b': case 'B':
+        setStarMode(*app, true);
+        selectPreset(*app, app->starIndex - 1);
+        break;
+    case 'i': case 'I':
+        setStarMode(*app, true);
+        selectMainSequence(*app, app->star.mass * 1.25);
+        break;
+    case 'u': case 'U':
+        setStarMode(*app, true);
+        selectMainSequence(*app, app->star.mass / 1.25);
+        break;
     default: break;
     }
 }
@@ -452,12 +563,12 @@ int renderOffscreen(const Programs& prog, GLuint vao, GLuint skyTex, const App& 
 
     int frames = std::max(1, benchFrames);
     // Une image de chauffe (compilation paresseuse des shaders par le pilote).
-    const float t0 = float(app.simTime);
-    traceFrame(prog, vao, skyTex, target, app.camera, t0, app.showDisk);
+    const double t0 = app.simTime;
+    traceScene(prog, vao, skyTex, target, app, t0);
     glFinish();
     auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < frames; ++i) {
-        traceFrame(prog, vao, skyTex, target, app.camera, t0 + i * app.simSpeed / 60.0f, app.showDisk);
+        traceScene(prog, vao, skyTex, target, app, t0 + i * app.simSpeed / 60.0);
         presentFrame(prog, vao, target, fbo, w, h);
         glFinish();
     }
@@ -469,7 +580,7 @@ int renderOffscreen(const Programs& prog, GLuint vao, GLuint skyTex, const App& 
                   << ms / frames << " ms par image (" << 1000.0 * frames / ms << " FPS)\n";
     }
     if (!path.empty()) {
-        traceFrame(prog, vao, skyTex, target, app.camera, t0, app.showDisk);
+        traceScene(prog, vao, skyTex, target, app, t0);
         presentFrame(prog, vao, target, fbo, w, h);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         if (!writePPM(path, w, h)) code = EXIT_FAILURE;
@@ -551,7 +662,10 @@ int main(int argc, char** argv)
         else if (arg == "--distance" && hasValue)
             app.camera.distance = app.camera.targetDistance = float(std::atof(argv[++i]));
         else if (arg == "--shaders" && hasValue) shaderDir = argv[++i];
+        else if (arg == "--star" && hasValue) { setStarMode(app, true); selectPreset(app, std::atoi(argv[++i])); }
+        else if (arg == "--mass" && hasValue) { setStarMode(app, true); selectMainSequence(app, std::atof(argv[++i])); }
     }
+    if (app.starMode) app.camera.distance = app.camera.targetDistance;
     const bool offscreen = !screenshotPath.empty() || benchFrames > 0;
 
     if (!glfwInit()) {
@@ -671,7 +785,7 @@ int main(int argc, char** argv)
         target.resize(tw, th);
 
         autoRes.begin();
-        traceFrame(prog, vao, skyTex, target, app.camera, float(app.simTime), app.showDisk);
+        traceScene(prog, vao, skyTex, target, app, app.simTime);
         autoRes.end();
         presentFrame(prog, vao, target, 0, fbW, fbH);
 
@@ -679,11 +793,14 @@ int main(int argc, char** argv)
 
         ++frames;
         if (now - fpsTimer >= 1.0) {
-            char title[200];
+            char title[320];
             std::snprintf(title, sizeof(title),
                           "Trou noir - ray tracing | %d FPS | rendu %dx%d%s | temps x%.2g%s | distance %.1f rs",
                           frames, tw, th, app.autoScale ? " (auto)" : "", app.simSpeed,
                           app.paused ? " (pause)" : "", app.camera.distance);
+            if (app.starMode)
+                std::snprintf(title, sizeof(title), "%s | %d FPS | rendu %dx%d%s", app.star.summary().c_str(),
+                              frames, tw, th, app.autoScale ? " (auto)" : "");
             glfwSetWindowTitle(window, title);
             frames = 0;
             fpsTimer = now;
