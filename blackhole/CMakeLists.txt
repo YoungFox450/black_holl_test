@@ -36,12 +36,29 @@ endif()
 add_library(glad STATIC external/glad/src/gl.c)
 target_include_directories(glad PUBLIC external/glad/include)
 
+# --- Dear ImGui : panneau de contrôle (sources incluses dans external/imgui) --
+add_library(imgui STATIC
+    external/imgui/imgui.cpp
+    external/imgui/imgui_demo.cpp
+    external/imgui/imgui_draw.cpp
+    external/imgui/imgui_tables.cpp
+    external/imgui/imgui_widgets.cpp
+    external/imgui/backends/imgui_impl_glfw.cpp
+    external/imgui/backends/imgui_impl_opengl3.cpp
+)
+target_include_directories(imgui PUBLIC external/imgui external/imgui/backends)
+target_link_libraries(imgui PUBLIC glfw)
+if(MSVC)
+    target_compile_options(imgui PRIVATE /utf-8)
+endif()
+
 # --- Exécutable --------------------------------------------------------------
 add_executable(blackhole
     src/main.cpp
     src/shader.cpp
+    src/ui.cpp
 )
-target_link_libraries(blackhole PRIVATE glfw glad)
+target_link_libraries(blackhole PRIVATE glfw glad imgui)
 
 # Les shaders sont lus depuis les sources : on peut les modifier et
 # appuyer sur R pour les recharger sans recompiler.
@@ -54,7 +71,8 @@ set_target_properties(blackhole PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<0:>")
 
 if(MSVC)
-    target_compile_options(blackhole PRIVATE /W4)
+    # /utf-8 : les textes accentués du panneau sont en UTF-8 dans les sources.
+    target_compile_options(blackhole PRIVATE /W4 /utf-8)
 else()
     target_compile_options(blackhole PRIVATE -Wall -Wextra)
 endif()

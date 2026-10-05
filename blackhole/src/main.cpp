@@ -38,7 +38,9 @@
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
 
+#include "app.hpp"
 #include "shader.hpp"
+#include "ui.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -52,84 +54,6 @@
 
 namespace {
 
-struct Vec3 {
-    float x, y, z;
-};
-Vec3 operator-(Vec3 a) { return {-a.x, -a.y, -a.z}; }
-Vec3 cross(Vec3 a, Vec3 b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
-Vec3 normalize(Vec3 a)
-{
-    float l = std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
-    return {a.x / l, a.y / l, a.z / l};
-}
-
-constexpr float kMinDistance = 2.5f;   // en rayons de Schwarzschild
-constexpr float kMaxDistance = 55.0f;
-constexpr float kMaxPitch = 1.5f;      // ~86°, évite le basculement aux pôles
-
-constexpr float kMinScale = 0.25f;
-constexpr float kMaxScale = 1.0f;
-// Nombre max de pas par rayon : garde-fou. Avec le pas proportionnel à r, un
-// rayon qui s'échappe en prend ~20 et un tour de la sphère de photons ~30.
-constexpr int kMaxSteps = 200;
-
-// Caméra en orbite autour du trou noir (placé à l'origine).
-// Les vitesses donnent un mouvement fluide avec inertie.
-struct OrbitCamera {
-    float yaw = 0.0f;
-    float pitch = 0.09f;      // légèrement au-dessus du disque
-    float distance = 22.0f;
-    float targetDistance = 22.0f;
-    float fovY = 1.0f;        // ~57°
-
-    float yawVel = 0.0f;      // rad/s
-    float pitchVel = 0.0f;    // rad/s
-    bool autoOrbit = false;
-
-    Vec3 position() const
-    {
-        return {distance * std::cos(pitch) * std::sin(yaw),
-                distance * std::sin(pitch),
-                distance * std::cos(pitch) * std::cos(yaw)};
-    }
-
-    void update(float dt, bool dragging)
-    {
-        if (!dragging) {
-            yaw += yawVel * dt;
-            pitch += pitchVel * dt;
-            float damping = std::exp(-3.0f * dt);
-            yawVel *= damping;
-            pitchVel *= damping;
-        }
-        if (autoOrbit)
-            yaw += 0.12f * dt;
-        if (pitch > kMaxPitch || pitch < -kMaxPitch) {
-            pitch = std::clamp(pitch, -kMaxPitch, kMaxPitch);
-            pitchVel = 0.0f;
-        }
-        // Zoom lissé.
-        distance += (targetDistance - distance) * (1.0f - std::exp(-8.0f * dt));
-    }
-};
-
-struct App {
-    OrbitCamera camera;
-    bool dragging = false;
-    double lastX = 0.0, lastY = 0.0;
-    double lastMoveTime = 0.0;
-    bool showDisk = true;
-    bool reloadRequested = false;
-
-    // Temps de simulation en unités rs/c. simSpeed = unités par seconde réelle.
-    double simTime = 0.0;
-    float simSpeed = 10.0f;
-    bool paused = false;
-
-    float renderScale = 0.5f;   // fraction de la taille de la fenêtre
-    bool autoScale = true;
-};
-
 std::string shaderDir = BH_SHADER_DIR;
 
 // Les trois programmes et leurs uniforms (cherchés une seule fois).
@@ -139,7 +63,9 @@ struct Programs {
     GLint skyFace = -1, skyFaceSize = -1;
     GLint resolution = -1, time = -1, camPos = -1, camRight = -1, camUp = -1,
           camForward = -1, fovY = -1, disk = -1, maxSteps = -1, skyTex = -1;
-    GLint image = -1, outputSize = -1;
+    GLint diskIn = -1, diskOut = -1, diskTemp = -1, diskBrightness = -1, clumpCount = -1,
+          doppler = -1, gravShift = -1;
+    GLint image = -1, outputSize = -1, exposure = -1;
 
     void destroy()
     {
@@ -176,9 +102,17 @@ bool buildPrograms(Programs& out)
     p.disk = glGetUniformLocation(p.trace, "uDisk");
     p.maxSteps = glGetUniformLocation(p.trace, "uMaxSteps");
     p.skyTex = glGetUniformLocation(p.trace, "uSky");
+    p.diskIn = glGetUniformLocation(p.trace, "uDiskIn");
+    p.diskOut = glGetUniformLocation(p.trace, "uDiskOut");
+    p.diskTemp = glGetUniformLocation(p.trace, "uDiskTemp");
+    p.diskBrightness = glGetUniformLocation(p.trace, "uDiskBrightness");
+    p.clumpCount = glGetUniformLocation(p.trace, "uClumpCount");
+    p.doppler = glGetUniformLocation(p.trace, "uDoppler");
+    p.gravShift = glGetUniformLocation(p.trace, "uGravShift");
 
     p.image = glGetUniformLocation(p.present, "uImage");
     p.outputSize = glGetUniformLocation(p.present, "uOutputSize");
+    p.exposure = glGetUniformLocation(p.present, "uExposure");
 
     out = p;
     return true;
@@ -267,8 +201,10 @@ void traceSize(int outW, int outH, float scale, int& w, int& h)
 
 // Passe 2 : ray tracing dans target.
 void traceFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarget& target,
-                const OrbitCamera& cam, float time, bool disk)
+                const App& app, float time)
 {
+    const OrbitCamera& cam = app.camera;
+    const DiskSettings& disk = app.disk;
     Vec3 pos = cam.position();
     Vec3 forward = normalize(-pos);
     Vec3 right = normalize(cross(forward, {0.0f, 1.0f, 0.0f}));
@@ -284,8 +220,15 @@ void traceFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarg
     glUniform3f(prog.camUp, up.x, up.y, up.z);
     glUniform3f(prog.camForward, forward.x, forward.y, forward.z);
     glUniform1f(prog.fovY, cam.fovY);
-    glUniform1i(prog.disk, disk ? 1 : 0);
-    glUniform1i(prog.maxSteps, kMaxSteps);
+    glUniform1i(prog.disk, app.showDisk ? 1 : 0);
+    glUniform1i(prog.maxSteps, app.maxSteps);
+    glUniform1f(prog.diskIn, disk.innerRadius);
+    glUniform1f(prog.diskOut, std::max(disk.outerRadius, disk.innerRadius + 0.5f));
+    glUniform1f(prog.diskTemp, disk.maxTemperature);
+    glUniform1f(prog.diskBrightness, disk.brightness);
+    glUniform1i(prog.clumpCount, disk.clumpCount);
+    glUniform1f(prog.doppler, disk.doppler ? 1.0f : 0.0f);
+    glUniform1f(prog.gravShift, disk.gravitationalShift ? 1.0f : 0.0f);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, skyTex);
     glUniform1i(prog.skyTex, 0);
@@ -295,7 +238,7 @@ void traceFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarg
 
 // Passe 3 : agrandissement + tone mapping vers outFbo (0 = la fenêtre).
 void presentFrame(const Programs& prog, GLuint vao, const TraceTarget& target, GLuint outFbo,
-                  int outW, int outH)
+                  int outW, int outH, float exposure)
 {
     glBindFramebuffer(GL_FRAMEBUFFER, outFbo);
     glViewport(0, 0, outW, outH);
@@ -304,6 +247,7 @@ void presentFrame(const Programs& prog, GLuint vao, const TraceTarget& target, G
     glBindTexture(GL_TEXTURE_2D, target.tex);
     glUniform1i(prog.image, 0);
     glUniform2f(prog.outputSize, float(outW), float(outH));
+    glUniform1f(prog.exposure, exposure);
     glBindVertexArray(vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
@@ -314,6 +258,7 @@ void onMouseButton(GLFWwindow* window, int button, int action, int)
 {
     App* app = appOf(window);
     if (button != GLFW_MOUSE_BUTTON_LEFT) return;
+    if (action == GLFW_PRESS && uiWantsMouse()) return;   // clic sur le panneau
     double now = glfwGetTime();
     app->dragging = (action == GLFW_PRESS);
     // Au clic, ou si la souris était immobile avant le relâchement : pas d'élan.
@@ -351,6 +296,7 @@ void zoom(OrbitCamera& cam, float steps)
 
 void onScroll(GLFWwindow* window, double, double dy)
 {
+    if (uiWantsMouse()) return;
     zoom(appOf(window)->camera, float(dy));
 }
 
@@ -358,6 +304,11 @@ void onKey(GLFWwindow* window, int key, int, int action, int)
 {
     if (action != GLFW_PRESS) return;
     App* app = appOf(window);
+    if (key == GLFW_KEY_F1 || key == GLFW_KEY_TAB) {
+        app->showUi = !app->showUi;
+        return;
+    }
+    if (uiWantsKeyboard()) return;   // saisie dans le panneau
     switch (key) {
     case GLFW_KEY_ESCAPE: glfwSetWindowShouldClose(window, GLFW_TRUE); break;
     case GLFW_KEY_SPACE: app->camera.autoOrbit = !app->camera.autoOrbit; break;
@@ -369,6 +320,7 @@ void onKey(GLFWwindow* window, int key, int, int action, int)
 // la disposition du clavier (AZERTY, QWERTY...).
 void onChar(GLFWwindow* window, unsigned int c)
 {
+    if (uiWantsKeyboard()) return;
     App* app = appOf(window);
     switch (c) {
     case 'h': case 'H': app->showDisk = !app->showDisk; break;
@@ -399,6 +351,7 @@ void onChar(GLFWwindow* window, unsigned int c)
 // ZQSD / WASD sont lues par position physique (GLFW_KEY_W = Z en AZERTY).
 void handleHeldKeys(GLFWwindow* window, App& app, float dt)
 {
+    if (uiWantsKeyboard()) return;
     auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
     const float accel = 6.0f * dt;   // vitesse cible ~1,2 rad/s
     OrbitCamera& cam = app.camera;
@@ -453,12 +406,12 @@ int renderOffscreen(const Programs& prog, GLuint vao, GLuint skyTex, const App& 
     int frames = std::max(1, benchFrames);
     // Une image de chauffe (compilation paresseuse des shaders par le pilote).
     const float t0 = float(app.simTime);
-    traceFrame(prog, vao, skyTex, target, app.camera, t0, app.showDisk);
+    traceFrame(prog, vao, skyTex, target, app, t0);
     glFinish();
     auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < frames; ++i) {
-        traceFrame(prog, vao, skyTex, target, app.camera, t0 + i * app.simSpeed / 60.0f, app.showDisk);
-        presentFrame(prog, vao, target, fbo, w, h);
+        traceFrame(prog, vao, skyTex, target, app, t0 + i * app.simSpeed / 60.0f);
+        presentFrame(prog, vao, target, fbo, w, h, app.exposure);
         glFinish();
     }
     double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
@@ -469,8 +422,8 @@ int renderOffscreen(const Programs& prog, GLuint vao, GLuint skyTex, const App& 
                   << ms / frames << " ms par image (" << 1000.0 * frames / ms << " FPS)\n";
     }
     if (!path.empty()) {
-        traceFrame(prog, vao, skyTex, target, app.camera, t0, app.showDisk);
-        presentFrame(prog, vao, target, fbo, w, h);
+        traceFrame(prog, vao, skyTex, target, app, t0);
+        presentFrame(prog, vao, target, fbo, w, h, app.exposure);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         if (!writePPM(path, w, h)) code = EXIT_FAILURE;
     }
@@ -488,7 +441,7 @@ int renderOffscreen(const Programs& prog, GLuint vao, GLuint skyTex, const App& 
 struct AutoResolution {
     GLuint query = 0;
     bool pending = false;
-    double budgetMs = 1000.0 / 30.0;
+    float lastMs = 0.0f;   // dernier temps GPU mesuré
 
     void begin()
     {
@@ -513,9 +466,12 @@ struct AutoResolution {
         GLuint64 ns = 0;
         glGetQueryObjectui64v(query, GL_QUERY_RESULT, &ns);
         pending = false;
+        lastMs = float(ns / 1.0e6);
         if (!app.autoScale) return;
-
         double ms = std::max(0.1, ns / 1.0e6);
+        // 85 % de la durée d'une image pour le ray tracing, le reste pour
+        // l'affichage, le panneau et la synchronisation.
+        double budgetMs = 0.85 * 1000.0 / app.targetFps;
         float ideal = app.renderScale * float(std::sqrt(budgetMs / ms));
         // Lissé pour éviter que la résolution ne "pompe".
         app.renderScale += 0.15f * (ideal - app.renderScale);
@@ -532,7 +488,6 @@ int main(int argc, char** argv)
     int benchFrames = 0;
     int width = 1280, height = 720;
     float fixedScale = -1.0f;
-    double targetFps = 30.0;
     int skySize = 1024;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -542,7 +497,7 @@ int main(int argc, char** argv)
         else if (arg == "--width" && hasValue) width = std::max(16, std::atoi(argv[++i]));
         else if (arg == "--height" && hasValue) height = std::max(16, std::atoi(argv[++i]));
         else if (arg == "--scale" && hasValue) fixedScale = float(std::atof(argv[++i]));
-        else if (arg == "--fps" && hasValue) targetFps = std::max(5.0, std::atof(argv[++i]));
+        else if (arg == "--fps" && hasValue) app.targetFps = float(std::max(5.0, std::atof(argv[++i])));
         else if (arg == "--sky" && hasValue) skySize = std::clamp(std::atoi(argv[++i]), 128, 4096);
         else if (arg == "--no-disk") app.showDisk = false;
         else if (arg == "--time" && hasValue) app.simTime = std::atof(argv[++i]);
@@ -622,16 +577,15 @@ int main(int argc, char** argv)
     glfwSetScrollCallback(window, onScroll);
     glfwSetKeyCallback(window, onKey);
     glfwSetCharCallback(window, onChar);
+    uiInit(window);   // après nos callbacks : ImGui les enchaîne
 
     TraceTarget target;
     AutoResolution autoRes;
-    // 85 % de la durée d'une image pour le ray tracing, le reste pour
-    // l'affichage et la synchronisation.
-    autoRes.budgetMs = 0.85 * 1000.0 / targetFps;
 
     double lastFrame = glfwGetTime();
     double fpsTimer = lastFrame;
     int frames = 0;
+    UiStats stats;
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
@@ -671,9 +625,14 @@ int main(int argc, char** argv)
         target.resize(tw, th);
 
         autoRes.begin();
-        traceFrame(prog, vao, skyTex, target, app.camera, float(app.simTime), app.showDisk);
+        traceFrame(prog, vao, skyTex, target, app, float(app.simTime));
         autoRes.end();
-        presentFrame(prog, vao, target, 0, fbW, fbH);
+        presentFrame(prog, vao, target, 0, fbW, fbH, app.exposure);
+
+        stats.traceWidth = tw;
+        stats.traceHeight = th;
+        stats.gpuMs = autoRes.lastMs;
+        uiDraw(app, stats);
 
         glfwSwapBuffers(window);
 
@@ -685,11 +644,13 @@ int main(int argc, char** argv)
                           frames, tw, th, app.autoScale ? " (auto)" : "", app.simSpeed,
                           app.paused ? " (pause)" : "", app.camera.distance);
             glfwSetWindowTitle(window, title);
+            stats.fps = frames;
             frames = 0;
             fpsTimer = now;
         }
     }
 
+    uiShutdown();
     target.destroy();
     glDeleteQueries(1, &autoRes.query);
     glDeleteTextures(1, &skyTex);
