@@ -1,0 +1,40 @@
+# Compile le moteur sous Linux et Windows à chaque push et PR.
+# Sous Linux, on lance aussi un rendu hors écran (Mesa, sans carte graphique)
+# pour vérifier que les shaders compilent et que l'image se génère.
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dépendances
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libglfw3-dev libgl1-mesa-dev mesa-utils xvfb python3-pil
+      - name: Compilation
+        run: |
+          cmake -S blackhole -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+      - name: Rendu de test
+        run: |
+          xvfb-run -a ./build/bin/blackhole --screenshot rendu.ppm --width 960 --height 540
+          python3 -c "from PIL import Image; Image.open('rendu.ppm').save('rendu.png')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rendu-linux
+          path: rendu.png
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compilation (MSVC)
+        run: |
+          cmake -S blackhole -B build
+          cmake --build build --config Release
