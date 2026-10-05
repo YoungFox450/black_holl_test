@@ -6,6 +6,7 @@
     "C_Cpp.default.cppStandard": "c++17",
     "files.associations": {
         "*.frag": "glsl",
-        "*.vert": "glsl"
+        "*.vert": "glsl",
+        "*.glsl": "glsl"
     }
 }
