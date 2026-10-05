@@ -70,6 +70,18 @@ Unités : `G = c = 1`, et le rayon de Schwarzschild `rs = 2GM/c² = 1`.
    qui produit l'effet de lentille gravitationnelle (images doubles, anneau
    d'Einstein).
 
+5. **Animation du gaz.** Le temps de simulation `t` est en unités `rs/c`.
+   - Le gaz tourne à la vitesse angulaire képlérienne vue depuis l'infini,
+     `Ω(r) = dφ/dt = √(M/r³)` : l'intérieur tourne bien plus vite que
+     l'extérieur, ce qui étire la matière en spirales.
+   - Des amas de gaz chaud perdent lentement du moment cinétique et
+     spiralent de ~10 rs jusqu'à l'ISCO. Leur angle est l'intégrale exacte
+     de Ω : `φ(t) = φ0 + (2√M / v_r)·(1/√r(t) − 1/√r0)`. En tombant ils
+     chauffent, car leur température suit `T(r)`.
+   - Doppler et décalage gravitationnel s'appliquent à toute cette matière,
+     donc un amas brille fort quand il arrive vers nous et s'éteint en
+     repartant.
+
 ## Installer les outils
 
 - **VS Code** avec les extensions recommandées (VS Code les propose à
@@ -103,16 +115,25 @@ cmake --build build --config Release
 
 ## Commandes
 
+Les lettres marchent en AZERTY comme en QWERTY.
+
 | Action | Effet |
 |---|---|
-| clic gauche + glisser | tourner autour du trou noir |
-| molette | zoom avant / arrière |
-| `D` | afficher / cacher le disque d'accrétion |
+| clic gauche + glisser | tourner autour du trou noir (la caméra garde de l'élan) |
+| flèches, ou ZQSD (WASD en QWERTY) | tourner autour du trou noir |
+| molette, ou Page↑ / Page↓ | zoom avant / arrière (jusqu'à 2,5 rs) |
+| `Espace` | orbite automatique de la caméra |
+| `C` | recentrer la caméra |
+| `P` | pause de la simulation |
+| `+` / `-` | accélérer / ralentir le temps |
+| `H` | afficher / cacher le disque d'accrétion |
 | `R` | recharger les shaders (modifier `blackhole.frag`, sauvegarder, `R`) |
 | `Échap` | quitter |
 
+La barre de titre affiche les FPS, la vitesse du temps et la distance.
+
 Image fixe sans fenêtre :
-`blackhole --screenshot rendu.ppm --width 1920 --height 1080 [--no-disk]`
+`blackhole --screenshot rendu.ppm --width 1920 --height 1080 [--no-disk] [--time T] [--yaw A] [--pitch A] [--distance D]`
 
 ## Pistes pour la suite
 

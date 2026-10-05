@@ -147,6 +147,85 @@ vec3 blackbody(float T)
 }
 
 // -----------------------------------------------------------------------------
+//  Dynamique du gaz dans le disque
+//
+//  Le gaz tourne à la vitesse angulaire képlérienne. En Schwarzschild, vue
+//  depuis l'infini (temps coordonnée t), elle garde la forme newtonienne :
+//      Ω(r) = dφ/dt = sqrt(M / r³)        avec M = rs / 2
+//  Le centre tourne donc beaucoup plus vite que le bord : le gaz se cisaille
+//  en longues traînées spirales. uTime est ce temps t, en unités rs/c.
+// -----------------------------------------------------------------------------
+const float M          = 0.5 * RS;
+const int   NUM_CLUMPS = 14;      // amas de gaz chaud qui spiralent vers le trou noir
+const float CLUMP_LIFE = 900.0;   // durée moyenne de la chute, de 12 rs à l'ISCO
+const float FLOW_CYCLE = 60.0;    // période de renouvellement de la texture
+
+float keplerOmega(float r)
+{
+    return sqrt(M / (r * r * r));
+}
+
+float fbm4(vec3 p)
+{
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 4; ++i) {
+        v += a * noise3(p);
+        p = p * 2.03 + 17.1;
+        a *= 0.5;
+    }
+    return v;
+}
+
+// Turbulence transportée par l'écoulement képlérien. Au bout d'un moment le
+// cisaillement étirerait la texture en anneaux infiniment fins ; on mélange
+// donc deux couches décalées d'une demi-période qui se renouvellent tour à
+// tour (technique du "flow map"), invisible à l'œil.
+float diskTurbulence(float r, float phi, float t)
+{
+    float omega = keplerOmega(r);
+    float c0 = t / FLOW_CYCLE;
+    float c1 = c0 + 0.5;
+    float a0 = phi - omega * fract(c0) * FLOW_CYCLE;
+    float a1 = phi - omega * fract(c1) * FLOW_CYCLE;
+    float n0 = fbm4(vec3(r * 1.6, cos(a0) * 3.0, sin(a0) * 3.0) + floor(c0) * 7.31);
+    float n1 = fbm4(vec3(r * 1.6, cos(a1) * 3.0, sin(a1) * 3.0) + floor(c1) * 7.31 + 3.7);
+    float w0 = 1.0 - abs(2.0 * fract(c0) - 1.0);   // w0 + w1 = 1
+    float n = mix(n1, n0, w0);
+    // Le mélange adoucit le contraste : on le rétablit.
+    return clamp((n - 0.5) * 1.6 + 0.5, 0.0, 1.0);
+}
+
+// Amas de gaz chaud. Chacun orbite à Ω(r) tout en perdant lentement du
+// moment cinétique (viscosité) : son rayon diminue de r0 à l'ISCO à vitesse
+// radiale constante v_r. L'angle s'obtient en intégrant Ω exactement :
+//     φ(t) = φ0 + ∫ Ω dt = φ0 + (2 sqrt(M) / v_r) (1/sqrt(r(t)) - 1/sqrt(r0))
+// En tombant, l'amas chauffe : sa température suit T(r) du disque.
+float diskClumps(float r, float phi, float t)
+{
+    float sum = 0.0;
+    for (int i = 0; i < NUM_CLUMPS; ++i) {
+        vec3 h = hash33(vec3(float(i) * 1.73 + 0.5, 3.1, 9.2));
+        float life = CLUMP_LIFE * (0.7 + 0.6 * h.x);
+        float age  = mod(t + h.y * life, life);
+        float r0   = DISK_OUT - 1.0 - 2.5 * h.z;
+        float vr   = (r0 - DISK_IN) / life;
+        float rc   = r0 - vr * age;
+        float ang  = h.x * 6.2831853 + 2.0 * sqrt(M) / vr * (inversesqrt(rc) - inversesqrt(r0));
+
+        float dPhi = mod(phi - ang + PI, 2.0 * PI) - PI;   // écart angulaire dans [-π, π]
+        float dr   = r - rc;
+        float arc  = dPhi * rc;                             // distance le long de l'orbite
+        // Forme allongée le long de l'orbite (cisaillement).
+        float blob = exp(-dr * dr * 8.0 - arc * arc * 0.35);
+
+        float s = age / life;
+        float fade = smoothstep(0.0, 0.08, s) * smoothstep(1.0, 0.92, s);
+        sum += blob * fade * (0.7 + 0.6 * h.y);
+    }
+    return sum;
+}
+
+// -----------------------------------------------------------------------------
 //  Disque d'accrétion mince dans le plan y = 0.
 //  p      : point où le rayon traverse le plan
 //  rayDir : direction de propagation du rayon (de la caméra vers la scène)
@@ -156,6 +235,7 @@ vec4 accretionDisk(vec3 p, vec3 rayDir)
 {
     float r = length(p.xz);
     if (r < DISK_IN || r > DISK_OUT) return vec4(0.0);
+    float phi = atan(p.z, p.x);
 
     // Profil de température d'un disque mince (Shakura-Sunyaev) :
     //   T(r) ∝ r^(-3/4) * (1 - sqrt(r_in / r))^(1/4)
@@ -163,11 +243,18 @@ vec4 accretionDisk(vec3 p, vec3 rayDir)
     float profile = pow(x, 0.75) * pow(max(1.0 - sqrt(x), 0.0), 0.25);
     float T = 4500.0 * profile / 0.488;  // normalisé pour ~4500 K au maximum
 
+    // Gaz turbulent et amas chauds : plus de matière = plus de chaleur.
+    float turb   = diskTurbulence(r, phi, uTime);
+    float clumps = diskClumps(r, phi, uTime);
+    float rings  = 0.75 + 0.25 * sin(r * 5.0 + turb * 6.0);
+    float heat   = (0.35 + 1.1 * turb * rings) + 2.2 * clumps;
+    T *= 0.9 + 0.15 * turb + 0.35 * clumps;
+
     // Vitesse orbitale circulaire (vue par un observateur statique) :
     //   v = sqrt(M / (r - 2M)) = sqrt(0.5 / (r - 1))   avec rs = 2M = 1
-    float beta  = sqrt(0.5 / (r - RS));
+    float beta  = sqrt(M / (r - RS));
     float gamma = 1.0 / sqrt(1.0 - beta * beta);
-    vec3 orbitDir = normalize(vec3(-p.z, 0.0, p.x));   // rotation du gaz
+    vec3 orbitDir = vec3(-sin(phi), 0.0, cos(phi));    // sens de rotation du gaz (φ croissant)
 
     // Effet Doppler relativiste : le côté qui vient vers nous est plus
     // lumineux et plus bleu. La lumière va du disque vers la caméra = -rayDir.
@@ -180,18 +267,11 @@ vec4 accretionDisk(vec3 p, vec3 rayDir)
 
     float g = doppler * gravShift;
     vec3 color = blackbody(T * g);
-    float intensity = pow(g, 4.0) * profile * 1.6;   // I_obs = g^4 * I_émis
-
-    // Texture turbulente qui tourne à la vitesse képlérienne ω ∝ r^(-3/2).
-    float omega = 0.5 * pow(r, -1.5) * 4.0;
-    float phi   = atan(p.z, p.x) - omega * uTime;
-    float turb  = fbm(vec3(r * 1.6, cos(phi) * 3.0, sin(phi) * 3.0));
-    float rings = 0.75 + 0.25 * sin(r * 5.0 + turb * 6.0);
-    intensity *= 0.35 + 1.1 * turb * rings;
+    float intensity = pow(g, 4.0) * profile * 1.6 * heat;   // I_obs = g^4 * I_émis
 
     // Bords adoucis.
     float edge = smoothstep(DISK_IN, DISK_IN + 0.3, r) * smoothstep(DISK_OUT, DISK_OUT - 4.0, r);
-    float alpha = clamp(edge * (0.55 + 0.6 * turb), 0.0, 1.0);
+    float alpha = clamp(edge * (0.55 + 0.6 * turb + 0.5 * clumps), 0.0, 1.0);
 
     return vec4(color * intensity * edge, alpha);
 }
