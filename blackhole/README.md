@@ -1,0 +1,122 @@
+# Trou noir : moteur de rendu ray tracing (C++ / OpenGL)
+
+On ne simule pas les étoiles : on simule la **lumière**. Pour chaque pixel, un
+rayon part de la caméra et on calcule sa trajectoire courbée par la gravité du
+trou noir. Selon l'endroit où il finit, le pixel prend la couleur de
+l'horizon (noir), du disque d'accrétion ou du fond de galaxie.
+
+| Avec disque d'accrétion | Sans disque (lentille gravitationnelle seule) |
+|---|---|
+| ![rendu](docs/rendu.jpg) | ![rendu sans disque](docs/rendu-sans-disque.jpg) |
+
+## Organisation
+
+```
+blackhole/
+├── CMakeLists.txt         build (télécharge GLFW automatiquement)
+├── external/glad/         chargeur OpenGL 3.3 core (fichiers générés)
+├── shaders/
+│   ├── fullscreen.vert    triangle plein écran : 1 pixel = 1 rayon
+│   └── blackhole.frag     LE ray tracer : géodésiques, disque, galaxie
+└── src/
+    ├── main.cpp           fenêtre, caméra orbitale, boucle de rendu
+    └── shader.cpp/.hpp    compilation des shaders
+```
+
+Tout le calcul se fait sur la carte graphique, dans `shaders/blackhole.frag`.
+Le C++ ouvre la fenêtre, gère la caméra et dessine un triangle qui couvre
+l'écran.
+
+## La physique utilisée
+
+Unités : `G = c = 1`, et le rayon de Schwarzschild `rs = 2GM/c² = 1`.
+
+1. **Trajectoire de la lumière (géodésique nulle de Schwarzschild).**
+   L'orbite d'un photon autour d'une masse vérifie l'équation de Binet :
+
+   `d²u/dφ² + u = (3/2)·rs·u²`  avec `u = 1/r`
+
+   Sans le terme de droite, le rayon irait tout droit. En coordonnées
+   cartésiennes 3D, c'est équivalent à une accélération centrale :
+
+   `d²x/dλ² = −(3/2)·rs·h²·x / r⁵`  où `h = |x × v|` est constant
+
+   On l'intègre pas à pas avec **Runge-Kutta 4** (pas plus petits près du trou
+   noir).
+
+2. **Horizon des événements** : si le rayon passe sous `r = rs`, il ne
+   ressortira jamais, le pixel est noir. L'ombre visible est plus grande que
+   l'horizon : son rayon apparent vaut `(3√3/2)·rs ≈ 2,6 rs` (les rayons qui
+   passent plus près tombent en spirale depuis la sphère de photons à
+   `1,5 rs`). Le rendu retrouve bien cette taille.
+
+3. **Disque d'accrétion** (dans le plan `y = 0`, de `3 rs` à `12 rs`).
+   Le bord intérieur est l'ISCO, la dernière orbite circulaire stable
+   (`6GM/c² = 3 rs`).
+   - Température d'un disque mince : `T ∝ r^(−3/4)·(1 − √(r_in/r))^(1/4)`
+   - Vitesse orbitale : `β = √(M / (r − 2M))`
+   - Effet Doppler relativiste : `D = 1 / (γ·(1 − β·cos θ))`
+     (le côté qui vient vers nous est plus brillant et plus bleu)
+   - Décalage gravitationnel vers le rouge : `√(1 − rs/r)`
+   - Intensité observée : `I_obs = g⁴·I_émis` avec `g = D·√(1 − rs/r)`
+
+   On voit aussi le dessus **et** le dessous du disque au-dessus et
+   au-dessous de l'ombre : c'est la lumière de l'arrière du disque, courbée
+   par-dessus le trou noir.
+
+4. **Fond de galaxie** : une fonction procédurale de la direction (étoiles,
+   bande lumineuse type Voie lactée, poussière, nébuleuses). Quand un rayon
+   s'échappe, on lit le fond dans sa direction **finale**, déviée : c'est ce
+   qui produit l'effet de lentille gravitationnelle (images doubles, anneau
+   d'Einstein).
+
+## Installer les outils
+
+- **VS Code** avec les extensions recommandées (VS Code les propose à
+  l'ouverture du dossier) : C/C++, CMake Tools, Shader languages support.
+- **CMake ≥ 3.16** et **git** (GLFW est téléchargé au premier configure).
+- **Un compilateur C++17** :
+  - Windows : « Build Tools for Visual Studio » (charge de travail
+    *Développement Desktop en C++*), puis ouvrir VS Code depuis
+    « Developer PowerShell for VS ». MinGW via MSYS2 marche aussi.
+  - Linux : `sudo apt install build-essential cmake git libgl1-mesa-dev
+    libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev`
+  - macOS : `xcode-select --install` et `brew install cmake`.
+- Une carte graphique compatible **OpenGL 3.3**.
+
+## Compiler et lancer dans VS Code
+
+Ouvrir la **racine du dépôt** dans VS Code, puis :
+
+- `Ctrl+Maj+B` : configure et compile (tâche « CMake: compiler »).
+- `F5` : compile puis lance sous le débogueur (choisir la configuration
+  « gdb / lldb » ou « Visual Studio / MSVC » selon le compilateur).
+- Ou `Terminal > Exécuter la tâche… > Lancer le trou noir`.
+
+En ligne de commande :
+
+```
+cmake -S blackhole -B build
+cmake --build build --config Release
+./build/bin/blackhole
+```
+
+## Commandes
+
+| Action | Effet |
+|---|---|
+| clic gauche + glisser | tourner autour du trou noir |
+| molette | zoom avant / arrière |
+| `D` | afficher / cacher le disque d'accrétion |
+| `R` | recharger les shaders (modifier `blackhole.frag`, sauvegarder, `R`) |
+| `Échap` | quitter |
+
+Image fixe sans fenêtre :
+`blackhole --screenshot rendu.ppm --width 1920 --height 1080 [--no-disk]`
+
+## Pistes pour la suite
+
+- Trou noir en rotation (métrique de Kerr) : ombre asymétrique.
+- Rendu progressif / anti-aliasing (plusieurs rayons par pixel).
+- Fond de ciel à partir d'une vraie image HDR (cubemap) de la Voie lactée.
+- Bloom autour du disque.

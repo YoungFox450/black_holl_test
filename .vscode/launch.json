@@ -1,0 +1,25 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Déboguer le trou noir (gdb / lldb)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/bin/blackhole",
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "CMake: compiler",
+            "MIMode": "gdb",
+            "osx": { "MIMode": "lldb" },
+            "windows": { "program": "${workspaceFolder}/build/bin/blackhole.exe" }
+        },
+        {
+            "name": "Déboguer le trou noir (Visual Studio / MSVC)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/bin/blackhole.exe",
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "CMake: compiler",
+            "console": "integratedTerminal"
+        }
+    ]
+}
