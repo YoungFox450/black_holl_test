@@ -174,7 +174,7 @@ vec3 magAxisWorld()
 // nulle, parfois un pic bref (la croute craque sous la tension du champ).
 float burstLevel()
 {
-    float n = noise3(vec3(uTime * 0.6, 1.7, 3.1));
+    float n = valueNoise(vec3(uTime * 0.6, 1.7, 3.1));
     return uBursts * smoothstep(0.68, 0.9, n) * 5.0;
 }
 
@@ -231,8 +231,8 @@ vec3 surface(vec3 n, float mu)
     // chez les etoiles froides (enveloppe convective), quasi absente chez les
     // etoiles chaudes (energie transportee par rayonnement).
     float s = uGranScale;
-    float cells = 1.0 - abs(2.0 * noise3(q * s + vec3(0.0, uTime * 0.03, 0.0)) - 1.0);
-    float fine  = noise3(q * s * 2.7 - vec3(uTime * 0.05));
+    float cells = 1.0 - abs(2.0 * valueNoise(q * s + vec3(0.0, uTime * 0.03, 0.0)) - 1.0);
+    float fine  = valueNoise(q * s * 2.7 - vec3(uTime * 0.05));
     float convective = clamp((8000.0 - uStarTemp) / 4000.0, 0.05, 1.0);
     float gran = 1.0 + convective * (0.45 * (cells - 0.6) + 0.12 * (fine - 0.5));
 
@@ -301,7 +301,7 @@ vec3 coronaLight(float b, vec3 m)
     // l'equateur ; au maximum, une couronne ronde, herissee partout.
     // (q.y = sinus de la latitude ; ~ latitude pres de l'equateur.)
     float belt = exp(-q.y * q.y / 0.12);
-    float n = noise3(q * 7.0);
+    float n = valueNoise(q * 7.0);
     float rays = 0.45 + 0.9 * n * n;
     float shape = mix(1.0, 0.25 + 1.6 * belt, uStreamers) * rays;
     float reach = 1.0 + 1.5 * (b - 1.0) * mix(0.3, belt, uStreamers);   // les jets portent plus loin
@@ -341,7 +341,7 @@ vec3 activityLight(vec3 pos, vec3 dir, bool hit, float tHit, out float trans, ou
             t = dot(center - pos, dir);
             vec3 d = pos + t * dir - center;
             float w = uPromA[i].w;
-            col = exp(-dot(d, d) / (w * w)) * (0.7 + 0.8 * noise3(d * 6.0 / w + seed)) * 1.2;
+            col = exp(-dot(d, d) / (w * w)) * (0.7 + 0.8 * valueNoise(d * 6.0 / w + seed)) * 1.2;
         } else {
             // Rideau ou arche dans le plan vertical (c, tg).
             vec3 n = cross(c, tg);
@@ -358,19 +358,19 @@ vec3 activityLight(vec3 pos, vec3 dir, bool hit, float tHit, out float trans, ou
             if (z > 1.25 * h) continue;
             if (type < 0.5) {
                 // Rideau : sommet irregulier, fils de gaz verticaux.
-                float top = h * (1.0 - u * u * u * u) * (0.7 + 0.5 * noise3(vec3(u * 2.5, seed, 0.0)));
+                float top = h * (1.0 - u * u * u * u) * (0.7 + 0.5 * valueNoise(vec3(u * 2.5, seed, 0.0)));
                 float body = 1.0 - smoothstep(0.75 * top, top, z);
                 // Eruption : le bas se detache, il ne reste qu'une arche qui monte.
                 float base = 0.6 * uPromC[i].w * top;
                 body *= smoothstep(base - 0.01, base + 0.01, z);
-                float threads = 0.45 + 0.75 * noise3(vec3(u * uPromA[i].w * 70.0, z * 10.0, seed));
+                float threads = 0.45 + 0.75 * valueNoise(vec3(u * uPromA[i].w * 70.0, z * 10.0, seed));
                 col = body * threads * edge * 1.0;
             } else {
                 // Arche : boucle de champ magnetique remplie de plasma.
                 float arc = h * sqrt(max(1.0 - u * u, 0.0));
                 float w = 0.006 + 0.12 * h;
                 float dz = (z - arc) / w;
-                float strands = 0.5 + 0.8 * noise3(vec3(u * 9.0, dz * 2.0, seed));
+                float strands = 0.5 + 0.8 * valueNoise(vec3(u * 9.0, dz * 2.0, seed));
                 col = exp(-dz * dz) * strands * edge * 1.2;
             }
         }
@@ -418,7 +418,7 @@ vec3 activityLight(vec3 pos, vec3 dir, bool hit, float tHit, out float trans, ou
             // Ni coquille ni coeur ici (l'interieur de la bulle est vide) :
             // on saute le bruit, la partie chere de l'echantillon.
             if (ws + wc < 0.01) continue;
-            float rough = noise3(rel * (4.0 / rb) + seed);
+            float rough = valueNoise(rel * (4.0 / rb) + seed);
             shell += ws * (0.15 + 1.6 * rough * rough * rough);
             core += wc * (0.3 + rough);
         }

@@ -221,7 +221,7 @@ vec3 jetEmission(vec3 p, vec3 rayDir)
     if (core < 1e-4) return vec3(0.0);
 
     float side = p.y > 0.0 ? 1.0 : -1.0;
-    float knots = 0.45 + 0.9 * pow(noise3(vec3(side * 7.0, ay * 0.3 - uTime * 0.02, 0.0)), 2.0);
+    float knots = 0.45 + 0.9 * pow(valueNoise(vec3(side * 7.0, ay * 0.3 - uTime * 0.02, 0.0)), 2.0);
 
     vec3 jetDir = vec3(0.0, side, 0.0);
     float cosTheta = dot(jetDir, -normalize(rayDir));
