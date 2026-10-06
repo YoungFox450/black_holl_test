@@ -79,6 +79,9 @@ public:
     std::vector<Asteroid> items;
     AsteroidStats stats;
     double density = 2500.0;   // kg/m³ (roche ; 7800 pour du fer)
+    bool tides = true;         // dislocation sous la limite de Roche
+    bool heating = true;       // fonte près d'une étoile
+    double meltSpeed = 1.0;    // multiplie la vitesse de fonte affichée
 
     // Un astéroïde au rayon r, vitesse = speedFactor x vitesse circulaire
     // (1 : orbite circulaire, < 1 : il plonge vers le centre, >= 1,41 : il
