@@ -273,10 +273,27 @@ De haut en bas :
   - activité de l'étoile (`src/ui_activity.cpp`) : nombre de Rossby,
     rayons X, rotation différentielle, phase du cycle (réglable), surface
     tachée, latitude des taches, éruptions en cours, oscillations.
-- **Onglet Vue** : distance, angles, champ de vision, orbite automatique.
+- **Onglet Vue** : distance, angles, champ de vision, orbite automatique
+  (et sa vitesse), sensibilité de la souris ; carte Simulation
+  (`src/ui_simulation.cpp`) : lentille gravitationnelle à couper pour
+  comparer, pause et avance pas à pas.
 - **Onglet Rendu** : résolution (auto ou fixe), FPS visé, pas max par rayon,
-  mesures, exposition, rechargement des shaders.
-- **Onglet Aide** : souris et raccourcis clavier.
+  mesures, exposition, luminosité du fond de galaxie, taille d'affichage des
+  astéroïdes, rechargement des shaders.
+- **Onglet Touches** (`src/ui_keys.cpp`) : chaque touche, rangée par thème
+  (caméra, temps, scène, trou noir, astéroïdes, rendu), avec une recherche.
+  Les touches actives dans la scène affichée sont entourées d'orange, les
+  autres sont grisées avec la scène où elles servent. Chaque touche affiche
+  aussi un message bref en bas de l'écran (« Jets relativistes : oui »).
+- **Jets** : puissance, vitesse du plasma et largeur.
+- **Astéroïdes** : marées et fonte peuvent être coupées, vitesse de fonte
+  réglable. Autour d'une étoile à neutrons (pulsar, magnétar), la limite de
+  Roche de la roche est à ~800 000 km, soit ~70 000 fois le rayon de
+  l'étoile : tout astéroïde posé près d'elle est brisé aussitôt en 6
+  morceaux, puis la surface à 1 million de K les chauffe à plusieurs
+  centaines de milliers de K et ils fondent en une vingtaine de secondes.
+  C'est la vraie physique ; couper les marées et la fonte permet de les
+  garder en orbite.
 - **Ligne d'état** : FPS (vert, orange ou rouge selon l'objectif),
   résolution du calcul, temps GPU.
 
@@ -300,6 +317,7 @@ Les lettres marchent en AZERTY comme en QWERTY.
 | `Espace` | orbite automatique de la caméra |
 | `C` | recentrer la caméra |
 | `P` | pause de la simulation |
+| `T` | pendant la pause : avancer d'un pas de temps |
 | `+` / `-` | accélérer / ralentir le temps |
 | `H` | afficher / cacher le disque d'accrétion |
 | `K` / `L` | baisser / augmenter la résolution du rendu (passe en mode fixe) |
@@ -309,6 +327,7 @@ Les lettres marchent en AZERTY comme en QWERTY.
 | `N` / `B` | étoile suivante / précédente de la liste |
 | `I` / `U` | étoile de la séquence principale plus / moins massive (×1,25) |
 | `J` | jets relativistes du trou noir (quasar) |
+| `V` | lentille gravitationnelle (la couper : la lumière va tout droit) |
 | `F` | ajouter un champ d'astéroïdes (réglages du panneau) |
 | `G` | ajouter un astéroïde en orbite circulaire |
 | `X` | retirer tous les astéroïdes |
@@ -335,7 +354,7 @@ Options :
 | `--advance T` | fait avancer les astéroïdes de T unités de temps avant l'image (rs/c, ou secondes pour une étoile) |
 
 Image fixe sans fenêtre (pleine résolution) :
-`blackhole --screenshot rendu.ppm --width 1920 --height 1080 [--no-disk] [--time T] [--yaw A] [--pitch A] [--distance D]`
+`blackhole --screenshot rendu.ppm --width 1920 --height 1080 [--no-disk] [--no-lensing] [--time T] [--yaw A] [--pitch A] [--distance D]`
 
 ## Pistes pour la suite
 

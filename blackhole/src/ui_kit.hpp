@@ -100,6 +100,10 @@ ImVec4 blackbodyColor(double temperature);
 void beginCard(const char* title);
 void endCard();
 
+// Onglet Touches et message bref après une touche (src/ui_keys.cpp).
+void keysTab(App& app);
+void toastOverlay(App& app);
+
 } // namespace ui
 
 #define UI_CONCAT_(a, b) a##b

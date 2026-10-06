@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <string>
 
 struct Vec3 {
     float x, y, z;
@@ -42,6 +43,7 @@ struct OrbitCamera {
     float yawVel = 0.0f;      // rad/s
     float pitchVel = 0.0f;    // rad/s
     bool autoOrbit = false;
+    float autoOrbitSpeed = 0.12f;   // rad/s (orbite automatique)
 
     Vec3 position() const
     {
@@ -60,7 +62,7 @@ struct OrbitCamera {
             pitchVel *= damping;
         }
         if (autoOrbit)
-            yaw += 0.12f * dt;
+            yaw += autoOrbitSpeed * dt;
         if (pitch > kMaxPitch || pitch < -kMaxPitch) {
             pitch = std::clamp(pitch, -kMaxPitch, kMaxPitch);
             pitchVel = 0.0f;
@@ -123,6 +125,19 @@ struct App {
     // Jets relativistes le long de l'axe du trou noir (quasar).
     bool jets = false;
     float jetPower = 1.0f;
+    float jetBeta = 0.8f;       // vitesse du plasma (fraction de c)
+    float jetWidth = 1.0f;      // largeur relative des jets
+
+    // Réglages de la simulation (panneau, onglets Vue et Rendu).
+    bool lensing = true;        // déviation de la lumière par la gravité
+    float skyBrightness = 1.0f; // luminosité du fond de galaxie
+    float asteroidScale = 1.0f; // taille d'affichage des astéroïdes
+    float mouseSensitivity = 1.0f;
+    int stepRequests = 0;       // pas de temps à faire pendant la pause (touche T)
+
+    // Message bref affiché en bas de l'écran après une touche ("Jets : oui").
+    std::string toast;
+    float toastAge = 1.0e9f;    // secondes depuis le message
 
     // Astéroïdes autour du corps central (trou noir ou étoile).
     AsteroidSystem asteroids;
@@ -133,6 +148,15 @@ struct App {
     // mutable : le gaz avance au moment du rendu, jusqu'au temps de l'image.
     mutable BinarySystem binary;
 };
+
+// Affiche un message bref en bas de l'écran (retour visuel des touches).
+inline void notify(App& app, std::string text)
+{
+    app.toast = std::move(text);
+    app.toastAge = 0.0f;
+}
+
+inline const char* onOff(bool v) { return v ? "oui" : "non"; }
 
 // Temps de l'étoile en jours (1 s affichée = kStarDaysPerSecond jours).
 inline double starDays(const App& app)
@@ -194,8 +218,10 @@ inline void setStarMode(App& app, bool on)
 inline void resetCamera(App& app)
 {
     bool autoOrbit = app.camera.autoOrbit;
+    float autoOrbitSpeed = app.camera.autoOrbitSpeed;
     app.camera = OrbitCamera{};
     app.camera.autoOrbit = autoOrbit;
+    app.camera.autoOrbitSpeed = autoOrbitSpeed;
     if (app.starMode)
         app.camera.distance = app.camera.targetDistance = kStarDistance;
 }

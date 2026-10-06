@@ -186,10 +186,10 @@ void AsteroidSystem::step(const CentralBody& body, double dt)
         if (alive && !body.blackHole) {
             double t = body.temperature * std::sqrt(1.0 / (2.0 * r));
             a.heat = float(t);
-            if (t > kVaporizeK) {
+            if (heating && t > kVaporizeK) {
                 // Perte de masse ~ flux reçu au-delà de la sublimation.
                 // Plafonnée pour qu'on voie l'astéroïde fondre.
-                double rate = std::min(0.02 * (std::pow(t / kVaporizeK, 4.0) - 1.0), 0.15);
+                double rate = std::min(0.02 * (std::pow(t / kVaporizeK, 4.0) - 1.0), 0.15) * meltSpeed;
                 a.sizeKm *= float(std::exp(-rate * dt));
                 if (a.sizeKm < kMinSizeKm) {
                     ++stats.vaporized;
@@ -199,7 +199,7 @@ void AsteroidSystem::step(const CentralBody& body, double dt)
         }
 
         // Marées : dislocation en fragments qui s'étalent le long de l'orbite.
-        if (alive && !a.fragment && r < roche) {
+        if (alive && tides && !a.fragment && r < roche) {
             ++stats.disrupted;
             alive = false;
             int pieces = items.size() + born.size() < kMaxAsteroids - 8 ? 6 : 2;

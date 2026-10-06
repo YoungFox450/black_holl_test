@@ -48,6 +48,10 @@ uniform int   uClumpCount;      // nombre d'amas de gaz chaud (0 à MAX_CLUMPS)
 uniform float uDoppler;         // 1 = effet Doppler relativiste, 0 = coupé
 uniform float uGravShift;       // 1 = décalage gravitationnel vers le rouge, 0 = coupé
 uniform float uJets;            // intensité des jets relativistes (0 = pas de jets)
+uniform float uJetBeta;         // vitesse du plasma des jets (fraction de c)
+uniform float uJetWidth;        // largeur relative des jets (1 = normale)
+uniform float uLensing;         // 1 = la gravité courbe la lumière, 0 = lignes droites
+uniform float uSkyGain;         // luminosité du fond de galaxie
 
 const float RS         = 1.0;   // rayon de Schwarzschild (horizon)
 const float ESCAPE_R   = 60.0;  // au-delà, le rayon est considéré libre
@@ -201,18 +205,18 @@ vec4 accretionDisk(vec3 p, vec3 rayDir)
 //  Le champ magnétique du disque, enroulé par la rotation, éjecte du plasma
 //  le long de l'axe de rotation (y) à une vitesse proche de c. On le rend en
 //  volume : à chaque pas, le rayon accumule la lumière du jet qu'il traverse.
-//  Le plasma va à β = 0,8 : le jet qui vient vers nous est amplifié par
+//  Le plasma va à β = uJetBeta (0,8 par défaut) : le jet qui vient vers nous est amplifié par
 //  l'effet Doppler (δ³) et celui qui s'éloigne presque éteint. C'est pour
 //  cela que beaucoup de quasars ne montrent qu'un seul jet.
 //  Les "nœuds" sont des chocs internes qui remontent le jet.
 // -----------------------------------------------------------------------------
-const float JET_BETA = 0.8;
+float gJetGamma;   // facteur de Lorentz des jets, calculé une fois par pixel dans main()
 
 vec3 jetEmission(vec3 p, vec3 rayDir)
 {
     float ay = abs(p.y);
     float d = length(p.xz);
-    float w = 0.25 + 0.07 * ay;                      // le jet s'ouvre lentement
+    float w = (0.25 + 0.07 * ay) * uJetWidth;        // le jet s'ouvre lentement
     float core = exp(-d * d / (w * w)) * smoothstep(1.5, 3.5, ay) * exp(-ay / 40.0);
     if (core < 1e-4) return vec3(0.0);
 
@@ -220,9 +224,8 @@ vec3 jetEmission(vec3 p, vec3 rayDir)
     float knots = 0.45 + 0.9 * pow(noise3(vec3(side * 7.0, ay * 0.3 - uTime * 0.02, 0.0)), 2.0);
 
     vec3 jetDir = vec3(0.0, side, 0.0);
-    float gamma = 1.0 / sqrt(1.0 - JET_BETA * JET_BETA);
     float cosTheta = dot(jetDir, -normalize(rayDir));
-    float delta = 1.0 / (gamma * (1.0 - JET_BETA * cosTheta));
+    float delta = 1.0 / (gJetGamma * (1.0 - uJetBeta * cosTheta));
     float beaming = mix(1.0, delta * delta * delta, uDoppler);
 
     // Rayonnement synchrotron : bleuté, coeur plus blanc.
@@ -310,7 +313,7 @@ vec3 geodesicAccel(vec3 x, float h2)
 {
     float r2 = dot(x, x);
     float r5 = r2 * r2 * sqrt(r2);
-    return -1.5 * RS * h2 * x / r5;
+    return -1.5 * RS * h2 * x / r5;   // appelé seulement avec la lentille
 }
 
 void main()
@@ -331,6 +334,7 @@ void main()
     vec3  color = vec3(0.0);
     float alpha = 0.0;           // opacité accumulée (disque semi-transparent)
     bool  captured = false;
+    gJetGamma = inversesqrt(1.0 - uJetBeta * uJetBeta);
 
     for (int i = 0; i < uMaxSteps; ++i) {
         float r = length(pos);
@@ -340,7 +344,8 @@ void main()
         // trajectoire de lumière ne remonte de là (pas de point de rebroussement
         // sous 1,5 rs), le rayon finira dans l'horizon. Inutile de le suivre
         // jusqu'au bout. Le disque commence à 3 rs : rien à ajouter en route.
-        if (r < RS || (r < PHOTON_R && radial < 0.0)) { captured = true; break; }
+        // (Sans lentille, les rayons vont tout droit : seul l'horizon les arrête.)
+        if (r < RS || (uLensing > 0.5 && r < PHOTON_R && radial < 0.0)) { captured = true; break; }
 
         // Assez loin et s'éloignant : la déviation restante est négligeable.
         if (r > ESCAPE_R && radial > 0.0) break;
@@ -352,19 +357,26 @@ void main()
         float dt = clamp(STEP * r, 0.02, 8.0);
         if (uJets > 0.0) dt = min(dt, 0.3 + 0.08 * r);   // jets fins : pas plus courts
 
-        // Intégration Runge-Kutta d'ordre 4.
-        vec3 k1v = geodesicAccel(pos, h2);
-        vec3 k1x = vel;
-        vec3 k2v = geodesicAccel(pos + 0.5 * dt * k1x, h2);
-        vec3 k2x = vel + 0.5 * dt * k1v;
-        vec3 k3v = geodesicAccel(pos + 0.5 * dt * k2x, h2);
-        vec3 k3x = vel + 0.5 * dt * k2v;
-        vec3 k4v = geodesicAccel(pos + dt * k3x, h2);
-        vec3 k4x = vel + dt * k3v;
-
         vec3 prev = pos;
-        pos += dt / 6.0 * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
-        vel += dt / 6.0 * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
+        if (uLensing < 0.5) {
+            // Sans lentille le rayon va tout droit : un pas exact, sans les
+            // quatre évaluations de Runge-Kutta (même branche pour tous les
+            // pixels, donc gratuite sur le GPU).
+            pos += dt * vel;
+        } else {
+            // Intégration Runge-Kutta d'ordre 4.
+            vec3 k1v = geodesicAccel(pos, h2);
+            vec3 k1x = vel;
+            vec3 k2v = geodesicAccel(pos + 0.5 * dt * k1x, h2);
+            vec3 k2x = vel + 0.5 * dt * k1v;
+            vec3 k3v = geodesicAccel(pos + 0.5 * dt * k2x, h2);
+            vec3 k3x = vel + 0.5 * dt * k2v;
+            vec3 k4v = geodesicAccel(pos + dt * k3x, h2);
+            vec3 k4x = vel + dt * k3v;
+
+            pos += dt / 6.0 * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
+            vel += dt / 6.0 * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
+        }
 
         if (uJets > 0.0)
             color += (1.0 - alpha) * jetEmission(0.5 * (prev + pos), vel) * dt;
@@ -395,7 +407,7 @@ void main()
     // de mipmap à partir des pixels voisins, ce qui n'est défini que si tous
     // les pixels exécutent la lecture. Les mipmaps lissent le ciel là où la
     // lentille le comprime énormément (près de l'ombre) : pas de scintillement.
-    vec3 sky = texture(uSky, vel).rgb;
+    vec3 sky = texture(uSky, vel).rgb * uSkyGain;
 
     if (!captured && alpha < 0.99) {
         // Le rayon s'est échappé : on lit le ciel dans sa direction déviée.

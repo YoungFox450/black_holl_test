@@ -39,8 +39,13 @@ void blackHoleModelsCard(App& app)
                "la lumière. L'effet Doppler amplifie le jet qui vient vers nous "
                "et éteint presque l'autre : beaucoup de quasars ne montrent "
                "qu'un seul jet.");
-    if (app.jets)
+    if (app.jets) {
         ui::slider("Puissance des jets", &app.jetPower, 0.1f, 4.0f, "%.2f", nullptr, true);
+        ui::slider("Vitesse du plasma", &app.jetBeta, 0.1f, 0.99f, "%.2f c",
+                   "Plus le plasma est rapide, plus le jet qui vient vers nous est "
+                   "amplifié et l'autre éteint (facteur Doppler au cube).");
+        ui::slider("Largeur des jets", &app.jetWidth, 0.4f, 4.0f, "× %.2f", nullptr, true);
+    }
 }
 UI_SECTION(ui::Tab::Object, 15, "Modèles et jets", blackHoleModelsCard, isBlackHoleScene);
 

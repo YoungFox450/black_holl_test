@@ -44,6 +44,8 @@ uniform samplerCube uSky;
 
 uniform float uStarTemp;    // temperature effective (K)
 uniform float uCompact;     // rs / R
+uniform float uLensing;     // 1 = la gravite courbe la lumiere, 0 = lignes droites
+uniform float uSkyGain;     // luminosite du fond de galaxie
 uniform float uLimb;        // coefficient d'assombrissement centre-bord u
 uniform float uGranScale;   // cellules de convection par rayon
 uniform float uRotation;    // angle de rotation de l'equateur (rad)
@@ -103,7 +105,7 @@ vec3 geodesicAccel(vec3 x, float h2)
 {
     float r2 = dot(x, x);
     float r5 = r2 * r2 * sqrt(r2);
-    return -1.5 * uCompact * h2 * x / r5;
+    return -1.5 * uCompact * uLensing * h2 * x / r5;
 }
 
 // Rotation autour de l'axe y (axe de rotation de l'etoile).
@@ -287,7 +289,7 @@ void main()
     // Etoile peu compacte (tout sauf les etoiles a neutrons) : la lumiere
     // est deviee de moins de 0,1 degre, invisible a l'ecran. On remplace
     // l'integration pas a pas par l'intersection exacte droite / sphere.
-    bool straight = uCompact < 1.0e-3;
+    bool straight = uCompact * uLensing < 1.0e-3;
     if (straight) {
         float b = dot(pos, dir);
         float cc = dot(pos, pos) - 1.0;
@@ -349,7 +351,7 @@ void main()
     }
 
     // Lecture du ciel hors de tout "if" (mipmaps, voir blackhole.frag).
-    vec3 sky = texture(uSky, vel).rgb;
+    vec3 sky = texture(uSky, vel).rgb * uSkyGain;
 
     if (!hit) {
         // Halo : lumiere diffusee par la couronne et l'oeil, qui decroit avec
