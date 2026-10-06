@@ -32,6 +32,7 @@
 //   T                       : pendant la pause, avancer d'un pas de temps
 //   F / G                   : ajouter un champ d'astéroïdes / un astéroïde
 //   X                       : retirer tous les astéroïdes
+//   M                       : éjection de masse coronale (étoile active)
 //   F1 ou Tab               : afficher / cacher le panneau (onglet Touches :
 //                             liste complète des touches)
 //   Échap                   : quitter
@@ -46,6 +47,7 @@
 //   --bench N       : rend N images hors écran et affiche le temps moyen
 //   --star N        : affiche l'étoile n° N de la liste (0 = Soleil)
 //   --mass M        : affiche une étoile de la séquence principale de M masses solaires
+//   --rotation D    : période de rotation de l'étoile en jours (après --star / --mass)
 //   --quasar        : trou noir supermassif avec disque brillant et jets
 //   --bh-mass M     : masse du trou noir (masses solaires)
 //   --field N       : ajoute un champ de N astéroïdes
@@ -268,13 +270,6 @@ void traceFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarg
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
-// Vitesse de rotation affichée (rad/jour), bornée pour les objets qui
-// tournent très vite (sinon la rotation crénelle à l'écran).
-double displayOmega(const Star& star)
-{
-    return std::min(6.283185307 / std::max(star.rotationDays, 1e-9), 1.5);
-}
-
 // Position (repère fixe) d'un point de latitude/longitude données à la
 // surface de l'étoile, entraîné par la rotation différentielle.
 Vec3 surfacePoint(double lat, double lon, double angle)
@@ -292,6 +287,7 @@ void updateStarActivity(App& app, double simTime)
     double days = simTime / 10.0 * kStarDaysPerSecond;
     CycleState cyc = cycleState(act, cyclePhase(app, act));
     app.flares.update(app.star, act, cyc, days);
+    app.corona.update(app.star, act, cyc, days, starRotationAngle(app.star, days));
 }
 
 // Passe 2 bis : ray tracing d'une étoile (shaders/star.frag). Les paramètres
@@ -420,6 +416,70 @@ void traceStarFrame(const Programs& prog, GLuint vao, GLuint skyTex, const Trace
     glUniform1i(loc("uFlareCount"), nFlares);
     glUniform4fv(loc("uFlarePos"), FlareSimulator::kMax, flarePos);
     glUniform1fv(loc("uFlareAmp"), FlareSimulator::kMax, flareAmp);
+
+    // Couronne, protubérances, éjections de masse coronale (src/corona.cpp).
+    const CoronaModel cor = computeCorona(star, act);
+    float corona = 0.0f;
+    if (app.showCorona && cor.active)
+        corona = float(std::clamp(std::log10(std::max(cor.xrayFlux, 1.0) / 1.0e3) / 3.5, 0.15, 1.0));
+    glUniform1f(loc("uCorona"), corona);
+    {
+        // Lumière de l'étoile diffusée par les électrons : sa couleur, à moitié
+        // blanchie. Même formule que blackbody() de star.frag (lumière linéaire).
+        const double t = std::clamp(star.temperature, 1000.0, 40000.0) / 100.0;
+        auto c01 = [](double v) { return std::pow(std::clamp(v, 0.0, 1.0), 2.2); };
+        double r = t <= 66.0 ? 1.0 : c01(1.29293618 * std::pow(t - 60.0, -0.1332047592));
+        double g = t <= 66.0 ? c01(0.39008157 * std::log(t) - 0.63184144)
+                             : c01(1.12989086 * std::pow(t - 60.0, -0.0755148492));
+        double b = t >= 66.0 ? 1.0 : (t <= 19.0 ? 0.0 : c01(0.54320678 * std::log(t - 10.0) - 1.19625408));
+        glUniform3f(loc("uCoronaTint"), float(0.5 + 0.5 * r), float(0.5 + 0.5 * g), float(0.5 + 0.5 * b));
+    }
+    glUniform1f(loc("uStreamers"), float(1.0 - std::clamp((cyc.level - 0.3) / 1.2, 0.0, 1.0)));
+
+    const int kP = CoronaSimulator::kMaxProminences, kC = CoronaSimulator::kMaxCmes;
+    float pa[4 * kP] = {}, pb[4 * kP] = {}, pc[4 * kP] = {};
+    int nProm = 0;
+    for (int i = 0; app.showProminences && i < app.corona.prominenceCount(); ++i) {
+        const Prominence& pr = app.corona.prominences()[i];
+        double fade = app.corona.fadeAt(pr, days);
+        if (fade <= 0.0) continue;
+        double a = pr.longitude + rotation;
+        double sl = std::sin(pr.latitude), cl = std::cos(pr.latitude);
+        Vec3 c = surfacePoint(pr.latitude, pr.longitude, rotation);
+        // Vecteurs est et nord à la surface, puis direction de la protubérance.
+        Vec3 east = {float(-std::sin(a)), 0.0f, float(-std::cos(a))};
+        Vec3 north = {float(-sl * std::cos(a)), float(cl), float(sl * std::sin(a))};
+        float co = float(std::cos(pr.orientation)), so = float(std::sin(pr.orientation));
+        Vec3 tg = normalize({co * east.x + so * north.x, co * east.y + so * north.y, co * east.z + so * north.z});
+        float* A = pa + 4 * nProm;
+        float* B = pb + 4 * nProm;
+        float* C = pc + 4 * nProm;
+        A[0] = c.x; A[1] = c.y; A[2] = c.z; A[3] = float(pr.halfLength);
+        B[0] = tg.x; B[1] = tg.y; B[2] = tg.z; B[3] = float(app.corona.heightAt(pr, days));
+        C[0] = float(pr.type); C[1] = pr.seed; C[2] = float(fade); C[3] = float(app.corona.liftAt(pr, days));
+        ++nProm;
+    }
+    glUniform1i(loc("uPromCount"), nProm);
+    glUniform4fv(loc("uPromA"), kP, pa);
+    glUniform4fv(loc("uPromB"), kP, pb);
+    glUniform4fv(loc("uPromC"), kP, pc);
+
+    float ca[4 * kC] = {}, cb[4 * kC] = {};
+    int nCme = 0;
+    for (int i = 0; app.showCmes && i < app.corona.cmeCount(); ++i) {
+        const Cme& cm = app.corona.cmes()[i];
+        double b = app.corona.cmeBrightness(cm, days);
+        if (b <= 0.0) continue;
+        float* A = ca + 4 * nCme;
+        A[0] = float(cm.dir[0]); A[1] = float(cm.dir[1]); A[2] = float(cm.dir[2]);
+        A[3] = float(app.corona.cmeRadius(cm, days));
+        cb[4 * nCme] = float(b);
+        cb[4 * nCme + 1] = float(i * 17 + 3);
+        ++nCme;
+    }
+    glUniform1i(loc("uCmeCount"), nCme);
+    glUniform4fv(loc("uCmeA"), kC, ca);
+    glUniform4fv(loc("uCmeB"), kC, cb);
 
     glUniform1f(loc("uMagTilt"), float(star.magneticTilt * 3.14159265 / 180.0));
     glUniform1f(loc("uBeam"), beam);
@@ -705,6 +765,15 @@ void onChar(GLFWwindow* window, unsigned int c)
         notify(a, "Astéroïde ajouté");
         break;
     }
+    case 'm': case 'M':
+        if (a.starMode && computeCorona(a.star, computeActivity(a.star)).active) {
+            double days = starDays(a);
+            a.corona.launchCme(a.star, computeActivity(a.star), days, starRotationAngle(a.star, days));
+            notify(a, "Éjection de masse coronale !");
+        } else {
+            notify(a, "M : éjection de masse coronale (étoile active seulement)");
+        }
+        break;
     case 'x': case 'X':
         a.asteroids.clear();
         notify(a, "Astéroïdes retirés");
@@ -882,6 +951,7 @@ int main(int argc, char** argv)
         else if (arg == "--shaders" && hasValue) shaderDir = argv[++i];
         else if (arg == "--star" && hasValue) { setStarMode(app, true); selectPreset(app, std::atoi(argv[++i])); }
         else if (arg == "--mass" && hasValue) { setStarMode(app, true); selectMainSequence(app, std::atof(argv[++i])); }
+        else if (arg == "--rotation" && hasValue) { app.star.rotationDays = std::max(std::atof(argv[++i]), 1e-5); app.starIndex = -1; }
         else if (arg == "--quasar") applyQuasar(app);
         else if (arg == "--bh-mass" && hasValue) app.massSolar = float(std::atof(argv[++i]));
         else if (arg == "--field" && hasValue) fieldCount = std::max(0, std::atoi(argv[++i]));
