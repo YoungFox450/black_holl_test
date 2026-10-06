@@ -6,6 +6,7 @@
 #include "activity.hpp"
 #include "asteroids.hpp"
 #include "corona.hpp"
+#include "binary.hpp"
 #include "star.hpp"
 
 #include <algorithm>
@@ -148,6 +149,10 @@ struct App {
     AsteroidSystem asteroids;
     FieldSettings field;
     bool showAsteroids = true;
+
+    // Système double : étoile compagne et gaz arraché (src/binary.*).
+    // mutable : le gaz avance au moment du rendu, jusqu'au temps de l'image.
+    mutable BinarySystem binary;
 };
 
 // Affiche un message bref en bas de l'écran (retour visuel des touches).
@@ -276,6 +281,27 @@ inline void applyQuasar(App& app)
     app.jetPower = 1.0f;
     app.camera.targetDistance = 35.0f;
     app.camera.pitch = 0.35f;
+}
+
+// Dans un système double, le disque tient dans le lobe de Roche du trou
+// noir (au-delà, le gaz serait attiré par l'étoile) : ~80 % du lobe.
+inline void fitDiskToBinary(App& app)
+{
+    float maxOuter = float(0.8 * app.binary.holeLobe());
+    app.disk.outerRadius = std::min(app.disk.outerRadius, std::max(maxOuter, app.disk.innerRadius + 1.0f));
+}
+
+// Système double : le trou noir arrache le gaz d'une étoile compagne qui
+// remplit son lobe de Roche. Vue de biais pour voir l'étoile, le jet de gaz
+// et le disque qu'il alimente.
+inline void applyBinary(App& app)
+{
+    setStarMode(app, false);
+    app.binary.settings.enabled = true;
+    app.showDisk = true;
+    fitDiskToBinary(app);
+    app.camera.targetDistance = 50.0f;
+    app.camera.pitch = 0.45f;
 }
 
 // Trou noir "calme" : réglages de départ.
