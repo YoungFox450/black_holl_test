@@ -41,7 +41,7 @@
 //   --scale S       : résolution fixe, S = fraction de la fenêtre (0.25 à 1)
 //   --sky N         : taille d'une face du fond de ciel (1024 par défaut)
 //   --screenshot image.ppm [--width W --height H]
-//                [--no-disk] [--time T] [--yaw A] [--pitch A] [--distance D]
+//                [--no-disk] [--no-lensing] [--time T] [--yaw A] [--pitch A] [--distance D]
 //                   : rend une seule image hors écran puis quitte
 //   --bench N       : rend N images hors écran et affiche le temps moyen
 //   --star N        : affiche l'étoile n° N de la liste (0 = Soleil)
@@ -873,6 +873,7 @@ int main(int argc, char** argv)
         else if (arg == "--fps" && hasValue) app.targetFps = float(std::max(5.0, std::atof(argv[++i])));
         else if (arg == "--sky" && hasValue) skySize = std::clamp(std::atoi(argv[++i]), 128, 4096);
         else if (arg == "--no-disk") app.showDisk = false;
+        else if (arg == "--no-lensing") app.lensing = false;
         else if (arg == "--time" && hasValue) app.simTime = std::atof(argv[++i]);
         else if (arg == "--yaw" && hasValue) app.camera.yaw = float(std::atof(argv[++i]));
         else if (arg == "--pitch" && hasValue) app.camera.pitch = float(std::atof(argv[++i]));
