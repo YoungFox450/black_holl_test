@@ -382,7 +382,16 @@ void main()
             color += (1.0 - alpha) * jetEmission(0.5 * (prev + pos), vel) * dt;
 
         // L'étoile compagne est-elle sur ce segment ?
-        float tComp = uCompanion.w > 0.0 ? companionHit(prev, pos) : -1.0;
+        // (Un "if" et non un "? :" : le compilateur évalue souvent les deux
+        // côtés d'un "? :", même sans étoile. Test grossier de la sphère
+        // englobante d'abord : la plupart des segments passent loin d'elle.)
+        float tComp = -1.0;
+        if (uCompanion.w > 0.0) {
+            vec3 mid = 0.5 * (prev + pos) - uCompanion.xyz;
+            float reach = uCompanion.w * uCompStretch + 0.5 * dt * length(vel);
+            if (dot(mid, mid) < reach * reach)
+                tComp = companionHit(prev, pos);
+        }
 
         // Le rayon a-t-il traversé le plan du disque pendant ce pas ?
         // (Seulement devant l'étoile compagne si elle est sur le segment.)
