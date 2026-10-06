@@ -38,7 +38,12 @@ finit, le pixel prend la couleur :
 - **Simulation d'étoiles** (touche `E`) : Soleil, Proxima du Centaure,
   Sirius A et B, Rigel, Bételgeuse, Aldébaran, étoile à neutrons, ou une
   étoile créée à partir de sa masse. Couleur de corps noir, bord assombri,
-  granulation, taches et lentille gravitationnelle pour les objets compacts.
+  granulation et lentille gravitationnelle pour les objets compacts.
+- **Activité des étoiles** calculée à partir de la rotation et du type
+  d'étoile, sans réglage à la main : taches avec ombre et pénombre, facules,
+  cycle magnétique et loi de Spörer, rotation différentielle, éruptions,
+  oscillations de luminosité. Les étoiles qui tournent vite sont les plus
+  actives (nombre de Rossby).
   Les étoiles peu compactes sont tracées en ligne droite (la déviation y est
   inférieure à 0,1°), ce qui les rend environ 2,5 fois plus rapides.
 - **Panneau de contrôle** (Dear ImGui, police Inter, `F1` ou `Tab`) : lecture
@@ -49,6 +54,48 @@ finit, le pixel prend la couleur :
 ![Panneau de contrôle](blackhole/docs/panneau.jpg)
 
 ![Étoiles simulées](blackhole/docs/etoiles.jpg)
+
+![Activité d'une étoile : taches, facules et éruptions](blackhole/docs/activite.jpg)
+
+## Pulsars, magnétars, quasar et astéroïdes
+
+| Pulsar du Crabe | Magnétar SGR 1806-20 | Quasar |
+|---|---|---|
+| ![pulsar](blackhole/docs/pulsar.jpg) | ![magnétar](blackhole/docs/magnetar.jpg) | ![quasar](blackhole/docs/quasar.jpg) |
+
+- **Étoiles à neutrons** (panneau « Étoile », ou touches `N` / `B`) : le
+  type se déduit de la période de rotation P et du champ magnétique B.
+  Au-dessus du champ critique quantique (4,4 × 10⁹ T) c'est un **magnétar**
+  (lignes de champ tordues, sursauts) ; au-dessus de la « ligne de mort »
+  des pulsars (B / P² > 1,7 × 10⁷ T/s²) c'est un **pulsar** (deux faisceaux
+  qui balaient l'espace comme un phare) ; sinon elle est éteinte. Le panneau
+  calcule la puissance rayonnée par le dipôle tournant et le ralentissement
+  de la rotation. Modèles réels : pulsar du Crabe, pulsar milliseconde
+  PSR J0437-4715, magnétar SGR 1806-20.
+- **Quasar** (bouton du panneau « Trou noir », `--quasar`) : trou noir
+  d'environ un milliard de soleils, disque très chaud et **jets
+  relativistes** (`J`). Les jets vont à 0,8 c : l'effet Doppler amplifie
+  celui qui vient vers nous et éteint presque l'autre.
+- **Astéroïdes** (panneau « Astéroïdes », `G` pour un astéroïde, `F` pour un
+  champ, `X` pour tout retirer) : chacun suit son orbite autour du corps
+  central, et ce qui lui arrive dépend de ce corps :
+  - trou noir : orbites de Paczyński-Wiita (dernière orbite stable à 3 rs),
+    avalé sous l'horizon ;
+  - étoile : chauffé par le rayonnement (T = T★ √(R / 2d)), il rougeoie puis
+    fond au-delà de ~1 500 K, ou s'écrase sur la surface ;
+  - tous : sous la **limite de Roche** il est disloqué par les marées en
+    fragments qui s'étalent le long de l'orbite. Autour de Sagittarius A*
+    elle est à ~10 rs, autour d'un trou noir stellaire ou d'une étoile à
+    neutrons elle est immense, autour d'un quasar elle est sous l'horizon
+    (l'astéroïde est avalé entier).
+
+| Champ d'astéroïdes autour de Sagittarius A* | Champ d'astéroïdes autour du Soleil |
+|---|---|
+| ![astéroïdes Sgr A*](blackhole/docs/asteroides-sgr-a.jpg) | ![astéroïdes Soleil](blackhole/docs/asteroides-soleil.jpg) |
+
+Limite connue : les astéroïdes ne sont pas déviés par la lentille
+gravitationnelle (leur lumière va en ligne droite jusqu'à la caméra), et ils
+ne s'attirent pas entre eux.
 
 ## Démarrage rapide
 
@@ -84,6 +131,8 @@ Le détail par système (paquets Linux, macOS) est dans
 | `F1` ou `Tab` | afficher / cacher le panneau de contrôle |
 | `E` | passer du trou noir à une étoile, et retour |
 | `N` / `B` | étoile suivante / précédente |
+| `J` | jets relativistes (quasar) |
+| `F` / `G` / `X` | champ d'astéroïdes, un astéroïde, tout retirer |
 | `K` / `L` / `O` | baisser, augmenter la résolution, ou la laisser automatique |
 | `Échap` | quitter |
 
@@ -123,6 +172,8 @@ Les détails et les mesures sont dans
     │   ├── blackhole.frag    le ray tracer : géodésiques, horizon, disque
     │   ├── star.frag         ray tracer des étoiles
     │   ├── sky.frag          fond de galaxie, calculé une fois en cubemap
+    │   ├── star.frag         ray tracing d'une étoile, pulsar, magnétar
+    │   ├── asteroid.vert/.frag  astéroïdes dessinés en points
     │   ├── present.frag      agrandissement et tone mapping
     │   ├── noise.glsl        fonctions de bruit partagées
     │   └── fullscreen.vert   triangle plein écran
@@ -131,7 +182,12 @@ Les détails et les mesures sont dans
         ├── app.hpp           état de la simulation partagé
         ├── ui.cpp/.hpp       panneau de contrôle
         ├── ui_kit.cpp/.hpp   thème et composants du panneau
-        ├── star.cpp/.hpp     modèle physique des étoiles
+        ├── ui_activity.cpp   cartes « Activité de l'étoile »
+        ├── ui_compact.cpp    cartes pulsar, magnétar et quasar
+        ├── ui_asteroids.cpp  cartes des astéroïdes
+        ├── star.cpp/.hpp     modèles physiques des étoiles et étoiles à neutrons
+        ├── activity.cpp/.hpp activité magnétique : taches, cycle, éruptions
+        ├── asteroids.cpp/.hpp  orbites, capture, marées, fonte des astéroïdes
         └── shader.cpp/.hpp   chargement et compilation des shaders
 ```
 
@@ -150,16 +206,9 @@ La physique (équation des photons, horizon, disque, Doppler, modèle des
 | 6. Étoiles et panneau | Simulation d'étoiles, panneau de contrôle Dear ImGui |
 | 7. Couleurs | Couleurs de corps noir converties en lumière linéaire : étoiles froides et disque bien orangés |
 | 8. Nouveau panneau | Thème moderne avec onglets et cartes, police Inter, étoiles 2,5 fois plus rapides |
+| 9. Activité et objets compacts | Activité des étoiles par lois physiques ; pulsars, magnétars, quasar et astéroïdes |
 
 ## Pistes pour la suite
-
-En préparation (PR ouvertes) :
-
-- activité des étoiles calculée à partir de leur rotation et de leur type
-  (taches, cycle, éruptions, oscillations) ;
-- pulsars et magnétars, quasar avec jets relativistes, astéroïdes en orbite.
-
-Idées pour la suite :
 
 - Trou noir en rotation (métrique de Kerr) : ombre asymétrique.
 - Anti-aliasing (plusieurs rayons par pixel) et bloom autour du disque.
@@ -171,6 +220,11 @@ Idées pour la suite :
 ```
 ./build/bin/blackhole --screenshot rendu.ppm --width 1280 --height 720 --time 40
 ./build/bin/blackhole --screenshot sans-disque.ppm --width 1280 --height 720 --no-disk
+./build/bin/blackhole --star 8 --time 37 --distance 10 --screenshot pulsar.ppm
+./build/bin/blackhole --star 10 --time 37 --distance 10 --screenshot magnetar.ppm
+./build/bin/blackhole --quasar --time 200 --screenshot quasar.ppm
+./build/bin/blackhole --bh-mass 4.3e6 --field 600 --advance 300 --pitch 0.45 --screenshot asteroides-sgr-a.ppm
+./build/bin/blackhole --star 0 --field 500 --advance 20 --pitch 0.5 --distance 16 --screenshot asteroides-soleil.ppm
 ```
 
 puis convertir les `.ppm` en `.jpg` (par exemple avec ImageMagick) dans
