@@ -355,7 +355,16 @@ void main()
         // référence 20 fois plus fin, l'écart est invisible (PSNR 60 dB), pour
         // ~8 fois moins de pas qu'avant près de la sphère de photons.
         float dt = clamp(STEP * r, 0.02, 8.0);
-        if (uJets > 0.0) dt = min(dt, 0.3 + 0.08 * r);   // jets fins : pas plus courts
+        if (uJets > 0.0) {
+            // Jets fins : pas plus courts, mais seulement près de l'axe. Hors
+            // du cylindre où le jet émet (exp(-d²/w²) > 1e-4, soit d < 3,1 w),
+            // le pas peut aller jusqu'au bord de ce cylindre, qui s'élargit
+            // avec |y| (marge de 20 % pour la courbure du rayon).
+            float jd = length(pos.xz);
+            float jr = 3.1 * (0.25 + 0.07 * abs(pos.y)) * uJetWidth;
+            float free = (jd - jr) * 0.8 / (1.0 + 0.22 * uJetWidth);
+            dt = min(dt, max(0.3 + 0.08 * r, free));
+        }
 
         vec3 prev = pos;
         if (uLensing < 0.5) {
