@@ -12,8 +12,11 @@
 //      gravite : T_obs = T sqrt(1 - rs/R))
 //    - assombrissement centre-bord : I(mu) = 1 - u (1 - mu)
 //    - granulation : cellules de convection, dont la taille suit la gravite
-//    - taches stellaires (etoiles froides et actives), plus froides
-//  Les parametres viennent du modele physique (src/star.cpp).
+//    - activite magnetique (src/activity.cpp) : taches (ombre + penombre)
+//      dans les bandes de latitude du cycle (loi de Sporer), facules
+//      brillantes pres du bord, rotation differentielle, eruptions
+//    - oscillations de luminosite (geantes rouges)
+//  Les parametres viennent du modele physique (src/star.cpp, src/activity.cpp).
 // =============================================================================
 
 out vec4 FragColor;
@@ -32,8 +35,33 @@ uniform float uStarTemp;    // temperature effective (K)
 uniform float uCompact;     // rs / R
 uniform float uLimb;        // coefficient d'assombrissement centre-bord u
 uniform float uGranScale;   // cellules de convection par rayon
-uniform float uActivity;    // 0 a 1 : taches stellaires
-uniform float uRotSpeed;    // vitesse de rotation affichee (rad/s)
+uniform float uRotation;    // angle de rotation de l'equateur (rad)
+uniform float uPulse;       // variation relative de luminosite (oscillations)
+
+// Taches. La probabilite qu'un point soit dans une tache depend de sa
+// latitude : deux bandes gaussiennes (cycle en cours, cycle precedent).
+uniform int   uSpotsOn;
+uniform vec4  uBand;        // (latitude 1, amplitude 1, latitude 2, amplitude 2)
+uniform float uBandWidth;   // ecart-type des bandes (rad)
+uniform float uFaculaRatio; // aire des facules / aire des taches
+uniform float uUmbraRatio;  // T_ombre / T
+uniform float uPenumbraRatio;
+// Deux generations de taches qui se relaient (naissance puis disparition) :
+// (poids, cisaillement accumule depuis la naissance en rad, graine).
+uniform vec3  uSpotLayer[2];
+
+// Eruptions : direction du centre (repere fixe), s = 2 x aire relative,
+// intensite du profil temporel (0..1).
+const int MAX_FLARES = 4;
+uniform int   uFlareCount;
+uniform vec4  uFlarePos[MAX_FLARES];
+uniform float uFlareAmp[MAX_FLARES];
+const float FLARE_TEMP = 9000.0;
+
+// Seuils du bruit fbm(3 octaves) depasses par une fraction 10^-k des points,
+// k = 0 ; 0,5 ; ... ; 4 (mesures, voir kSpotNoiseQuantiles dans activity.hpp).
+const float SPOT_Q[9] = float[9](0.0826, 0.4808, 0.5599, 0.6222, 0.6624,
+                                 0.6875, 0.7012, 0.7118, 0.7226);
 
 const float ESCAPE_R = 80.0;
 const float STEP     = 0.2;
@@ -68,10 +96,27 @@ vec3 rotateY(vec3 p, float a)
     return vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z);
 }
 
+// Seuil de bruit au-dessus duquel se trouve une fraction p de la surface.
+float noiseThreshold(float p)
+{
+    if (p < 1e-5) return 2.0;                 // jamais atteint
+    float k = clamp(-log(p) / log(10.0), 0.0, 3.999) * 2.0;
+    int i = int(k);
+    return mix(SPOT_Q[i], SPOT_Q[i + 1], k - float(i));
+}
+
+// Couverture locale des taches selon la latitude (lat = |latitude|).
+float spotProbability(float lat)
+{
+    float a = (lat - uBand.x) / uBandWidth;
+    float b = (lat - uBand.z) / uBandWidth;
+    return min(uBand.y * exp(-0.5 * a * a) + uBand.w * exp(-0.5 * b * b), 0.5);
+}
+
 // Lumiere emise par la surface au point n (|n| = 1), vue sous l'angle mu.
 vec3 surface(vec3 n, float mu)
 {
-    vec3 q = rotateY(n, -uTime * uRotSpeed);
+    vec3 q = rotateY(n, -uRotation);
 
     // Granulation : centres chauds des cellules, bords sombres. Elle est forte
     // chez les etoiles froides (enveloppe convective), quasi absente chez les
@@ -82,19 +127,55 @@ vec3 surface(vec3 n, float mu)
     float convective = clamp((8000.0 - uStarTemp) / 4000.0, 0.05, 1.0);
     float gran = 1.0 + convective * (0.45 * (cells - 0.6) + 0.12 * (fine - 0.5));
 
-    // Taches : regions plus froides, surtout aux latitudes moyennes.
-    float lat = abs(q.y);
-    float band = smoothstep(0.05, 0.2, lat) * (1.0 - smoothstep(0.55, 0.75, lat));
-    float spotNoise = fbm(q * 3.5 + vec3(11.0), 3);
-    float spot = smoothstep(0.62 - 0.12 * uActivity, 0.70 - 0.12 * uActivity, spotNoise) * band * uActivity;
+    // Taches et facules.
+    float spot = 0.0, umbra = 0.0, facula = 0.0;
+    if (uSpotsOn != 0) {
+        float sinLat2 = n.y * n.y;
+        float p = spotProbability(asin(abs(n.y)));
+        float tSpot = noiseThreshold(p);
+        float tUmbra = noiseThreshold(0.2 * p);            // ombre : ~20 % de la tache
+        float tFac = noiseThreshold(p * (1.0 + uFaculaRatio));
+        for (int k = 0; k < 2; ++k) {
+            vec3 layer = uSpotLayer[k];
+            if (layer.x <= 0.001) continue;
+            // Rotation differentielle : Omega(lat) = Omega_eq (1 - alpha sin^2 lat).
+            vec3 qs = rotateY(n, -uRotation + layer.y * sinLat2);
+            float v = fbm(qs * 3.5 + vec3(11.0) + layer.z * vec3(7.13, 3.71, 5.29), 3);
+            float sk = smoothstep(tSpot - 0.008, tSpot + 0.008, v);
+            spot   += layer.x * sk;
+            umbra  += layer.x * smoothstep(tUmbra - 0.008, tUmbra + 0.008, v);
+            facula += layer.x * smoothstep(tFac - 0.008, tFac + 0.008, v) * (1.0 - sk);
+        }
+    }
+    // Temperature locale : ombre et penombre plus froides que la photosphere.
+    float tFactor = 1.0 - spot * (1.0 - uPenumbraRatio) - umbra * (uPenumbraRatio - uUmbraRatio);
+    // Facules : contraste quasi nul au centre du disque, ~15 % pres du bord.
+    float facBoost = 1.0 + facula * 0.15 * (1.0 - mu);
 
     // Decalage gravitationnel vers le rouge.
     float g = sqrt(max(1.0 - uCompact, 0.05));
-    float T = uStarTemp * g * (1.0 - 0.3 * spot) * mix(1.0, gran, 0.5);
+    float pulse = 1.0 + uPulse;
+    float T = uStarTemp * g * tFactor * mix(1.0, gran, 0.5) * sqrt(sqrt(facBoost * pulse));
 
     float limb = 1.0 - uLimb * (1.0 - mu);
-    float intensity = limb * gran * (1.0 - 0.75 * spot);
-    return blackbody(T) * intensity * EXPOSURE;
+    // Luminance bolometrique : proportionnelle a T^4 (Stefan-Boltzmann).
+    float t2 = tFactor * tFactor;
+    float intensity = limb * gran * t2 * t2 * facBoost * pulse;
+    vec3 color = blackbody(T) * intensity;
+
+    // Eruptions : plasma a ~9 000 K. Brillance relative (T_e / T)^4, sur une
+    // aire qui donne la bonne luminosite totale (calculee dans activity.cpp).
+    if (uFlareCount > 0) {
+        vec3 flareColor = blackbody(FLARE_TEMP * g);
+        float ratio = FLARE_TEMP / uStarTemp;
+        float contrast = ratio * ratio * ratio * ratio;
+        for (int i = 0; i < MAX_FLARES; ++i) {
+            if (i >= uFlareCount) break;
+            float d = 1.0 - dot(n, uFlarePos[i].xyz);
+            color += flareColor * contrast * uFlareAmp[i] * exp(-d / uFlarePos[i].w);
+        }
+    }
+    return color * EXPOSURE;
 }
 
 void main()

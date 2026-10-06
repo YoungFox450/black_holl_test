@@ -66,12 +66,14 @@ void simulationSection(App& app)
     ImGui::Checkbox("Pause (P)", &app.paused);
     ImGui::SliderFloat("Vitesse du temps", &app.simSpeed, 0.25f, 200.0f, "x%.2f",
                        ImGuiSliderFlags_Logarithmic);
-    help("Unités de temps rs/c simulées par seconde à l'écran. "
-         "Touches + et - pour accélérer ou ralentir.");
+    help("Trou noir : unités de temps rs/c simulées par seconde à l'écran. "
+         "Étoile : x10 = 2 jours par seconde. Touches + et - pour accélérer "
+         "ou ralentir.");
 
     char real[32];
     if (app.starMode) {
-        ImGui::Text("Temps écoulé : %.0f s", app.simTime / 10.0);
+        formatDuration(starDays(app) * 86400.0, real, sizeof(real));
+        ImGui::Text("Temps écoulé : %.0f s  (%s pour l'étoile)", app.simTime / 10.0, real);
     } else {
         formatDuration(app.simTime * kSunRsOverCSeconds * app.massSolar, real, sizeof(real));
         ImGui::Text("Temps écoulé : %.0f rs/c  (%s pour ce trou noir)", app.simTime, real);
@@ -208,7 +210,7 @@ void starSection(App& app)
             app.starIndex = -1;
             star = whiteDwarf(wdMass, wdTemp);
         }
-        help("Cœur d'étoile éteinte, de la taille de la Terre. Plus elle est "
+        help("Coeur d'étoile éteinte, de la taille de la Terre. Plus elle est "
              "lourde, plus elle est PETITE (relation de Chandrasekhar) ; "
              "au-delà de 1,44 soleil elle s'effondre.");
     }
@@ -222,8 +224,9 @@ void starSection(App& app)
          "Bételgeuse : ~760.");
     edited |= sliderDouble("Température", &star.temperature, 2000.0, 1.0e6, "%.0f K", true);
     edited |= sliderDouble("Rotation", &star.rotationDays, 1e-5, 40000.0, "%.3g jours", true);
-    edited |= sliderDouble("Activité", &star.activity, 0.0, 1.0, "%.2f");
-    help("Taches et éruptions : 0 = étoile calme, 1 = très active.");
+    help("Période de rotation à l'équateur. Pour une étoile froide, c'est elle "
+         "qui fixe l'activité magnétique (section Activité) : plus l'étoile "
+         "tourne vite, plus elle a de taches et d'éruptions.");
     if (edited && app.starIndex >= 0) {
         app.starIndex = -1;
         star.name = "Sur mesure";
@@ -244,6 +247,109 @@ void starSection(App& app)
          "Quasi nul pour le Soleil (la lumière va tout droit), ~0,35 pour une "
          "étoile à neutrons : on voit alors une partie de sa face cachée. "
          "1 = elle devient un trou noir.");
+}
+
+// Activité magnétique et oscillations (modèles de src/activity.cpp).
+void activitySection(App& app)
+{
+    if (!ImGui::CollapsingHeader("Activité de l'étoile", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    const Star& star = app.star;
+    const StellarActivity act = computeActivity(star);
+    char a[32], b[32];
+
+    if (star.radius < 0.02) {
+        ImGui::TextWrapped("Objet dégénéré : plus de fusion ni de convection, donc ni taches, "
+                           "ni cycle, ni éruptions de type solaire.");
+        return;
+    }
+
+    // Dynamo et relation rotation-activité.
+    ImGui::SeparatorText("Dynamo");
+    if (act.convective <= 0.0) {
+        ImGui::TextWrapped("Pas de dynamo : au-dessus de ~6 700 K l'enveloppe est radiative "
+                           "(cassure de Kraft). Ni taches, ni cycle, ni éruptions.");
+    } else {
+        ImGui::Text("Retournement convectif tau_c : %.3g jours", act.turnoverDays);
+        help("Temps que met une cellule de convection pour remonter. "
+             "Naines : log tau_c = 2,33 - 1,50 M + 0,31 M² (Wright et al. 2018). "
+             "Géantes : ~150 jours (Gunn et al. 1998).");
+        ImGui::Text("Nombre de Rossby Ro = P/tau_c : %.3g%s", act.rossby,
+                    act.saturated ? "  (saturé)" : "");
+        help("Ro petit = rotation rapide devant la convection = dynamo efficace. "
+             "Sous Ro = 0,13 l'activité plafonne (régime saturé).");
+        ImGui::Text("Rayons X : L_X / L_bol = %.2g", act.xrayRatio);
+        help("Relation rotation-activité (Wright et al. 2011) : "
+             "10^-3,13 si Ro < 0,13, sinon 10^-3,13 (Ro / 0,13)^-2,7.");
+    }
+
+    // Cycle, taches, facules.
+    if (act.active()) {
+        CycleState cyc = cycleState(act, cyclePhase(app, act));
+        ImGui::SeparatorText("Cycle magnétique et taches");
+        if (act.cycleYears > 0.0) {
+            ImGui::Text("Période du cycle : %.3g ans", act.cycleYears);
+            help("Branche « inactive » de Böhm-Vitense (2007) : P_cyc = 158 P_rot "
+                 "(11 ans pour le Soleil). Forme du cycle : Hathaway (1994), "
+                 "montée rapide puis descente lente.");
+            float phase = float(cyclePhase(app, act));
+            if (ImGui::SliderFloat("Phase du cycle", &phase, 0.0f, 0.999f, "%.2f")) {
+                double p = starDays(app) / (act.cycleYears * 365.25);
+                app.cyclePhaseOffset = phase - (p - std::floor(p));
+            }
+            help("0 = minimum. Maximum vers 0,4.");
+        } else {
+            ImGui::TextWrapped("Pas de cycle régulier : rotation trop rapide (régime saturé), "
+                               "l'activité reste au maximum.");
+        }
+        ImGui::Text("Niveau d'activité : %.2f x la moyenne", cyc.level);
+        ImGui::Text("Surface tachée : %.2g %%  (moyenne %.2g %%)",
+                    100.0 * act.spotCoverage * cyc.level, 100.0 * act.spotCoverage);
+        help("Fraction moyenne calée entre le Soleil (~0,1 %) et les naines M "
+             "saturées (~40 %, O'Neal et al. 2004) : f = 0,4 (L_X / L_X,sat)^0,84.");
+        ImGui::Text("Latitude des taches : %.0f° (cycle précédent : %.0f°)",
+                    cyc.bandLatDeg[0], cyc.bandLatDeg[1]);
+        help("Loi de Spörer : les taches naissent vers 28° et migrent vers "
+             "l'équateur au fil du cycle, lat = 28° exp(-t / 90 mois) "
+             "(diagramme papillon). Les rotateurs rapides ont des taches "
+             "polaires (Schüssler & Solanki 1992).");
+        ImGui::Text("Ombre : %.0f K   pénombre : %.0f K", act.umbraTemp, act.penumbraTemp);
+        help("Écart de température mesuré sur les taches stellaires "
+             "(Berdyugina 2005) : ~1 700 K pour le Soleil, ~200 K pour les "
+             "naines M. Brillance : (T_tache / T)^4.");
+        ImGui::Text("Facules : %.2g %% de la surface", 100.0 * act.faculaCoverage * cyc.level);
+        help("Régions magnétiques brillantes, surtout visibles près du bord.");
+        ImGui::Text("Durée de vie d'une tache : %.0f jours", act.spotLifetimeDays);
+        help("Règle de Gnevyshev-Waldmeier : durée = aire max / 10 MSH par jour.");
+
+        // Rotation différentielle.
+        ImGui::SeparatorText("Rotation différentielle");
+        double pole = star.rotationDays / std::max(1.0 - act.shearRatio, 1e-6);
+        ImGui::Text("Équateur : %.3g j   pôles : %.3g j", star.rotationDays, pole);
+        help("Omega(lat) = Omega_eq (1 - alpha sin² lat) (Snodgrass). Cisaillement "
+             "dOmega = 0,073 rad/jour × (T / 5772 K)^8,6 (Collier Cameron 2007) : "
+             "fort pour les étoiles F, quasi nul pour les naines M.");
+
+        // Éruptions.
+        ImGui::SeparatorText("Éruptions");
+        ImGui::Text("Fréquence : %.3g par jour (E > 1 s × L_bol)", act.flaresPerDay * cyc.level);
+        help("Proportionnelle à l'émission X, calée sur la naine M GJ 1243 "
+             "(Hawley et al. 2014). Énergies en loi de puissance dN/dE prop. à E^-2, "
+             "profil de Davenport (2014), plasma à ~9 000 K. Affichées au ralenti.");
+        ImGui::Text("Affichées : E > %.3g s × L_bol   en cours : %d   total : %d",
+                    app.flares.visibleThresholdSeconds(), app.flares.count(), app.flares.total());
+    }
+
+    // Oscillations.
+    if (act.oscAmplitude > 0.0) {
+        ImGui::SeparatorText("Oscillations");
+        formatDuration(1.0 / (act.numaxMicroHz * 1e-6), a, sizeof(a));
+        formatDuration(1.0 / (act.deltaNuMicroHz * 1e-6), b, sizeof(b));
+        ImGui::Text("Période : %s   amplitude : %.2g %%", a, 100.0 * act.oscAmplitude);
+        help("Ondes sonores excitées par la convection. "
+             "nu_max = 3 090 µHz (g / g_sol) (T / T_sol)^-1/2 ; "
+             "dL/L = 4,7 ppm (L / M)^0,8 (Kjeldsen & Bedding 1995). "
+             "Trop rapides pour être vues sur le Soleil (5 min).");
+    }
 }
 
 void cameraSection(App& app)
@@ -372,6 +478,7 @@ void uiDraw(App& app, const UiStats& stats)
             simulationSection(app);
             if (app.starMode) {
                 starSection(app);
+                activitySection(app);
             } else {
                 blackHoleSection(app);
                 diskSection(app);

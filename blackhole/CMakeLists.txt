@@ -58,6 +58,7 @@ add_executable(blackhole
     src/shader.cpp
     src/ui.cpp
     src/star.cpp
+    src/activity.cpp
 )
 target_link_libraries(blackhole PRIVATE glfw glad imgui)
 

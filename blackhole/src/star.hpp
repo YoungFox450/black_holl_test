@@ -24,8 +24,8 @@ struct Star {
     double mass = 1.0;         // M☉
     double radius = 1.0;       // R☉
     double temperature = 5772; // K (température effective)
-    double rotationDays = 25;  // période de rotation (jours)
-    double activity = 0.3;     // taches et éruptions, 0 = calme, 1 = très active
+    double rotationDays = 25;  // période de rotation (jours) ; l'activité
+                               // magnétique en découle (src/activity.cpp)
 
     double luminosity() const;          // L☉
     double surfaceGravity() const;      // g☉
