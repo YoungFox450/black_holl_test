@@ -68,6 +68,9 @@ add_executable(blackhole
     src/ui_keys.cpp
     src/corona.cpp
     src/ui_corona.cpp
+    src/binary.cpp
+    src/binary_gfx.cpp
+    src/ui_binary.cpp
 )
 target_link_libraries(blackhole PRIVATE glfw glad imgui)
 
