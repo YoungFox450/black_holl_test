@@ -72,7 +72,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -197,24 +196,9 @@ GLuint bakeSky(const Programs& prog, GLuint vao, int size)
 // procédural.
 GLuint makeSky(const Programs& prog, GLuint vao, int size, App& app)
 {
-    // Filet de sécurité : un fichier témoin existe pendant le calcul du ciel
-    // en image. S'il est encore là au lancement suivant, c'est que le pilote
-    // a planté pendant ce calcul : on démarre alors sur le ciel procédural.
-    std::error_code ec;
-    const auto marker = std::filesystem::temp_directory_path(ec) / "blackhole_ciel_en_cours";
-    if (app.sky.useImage && !ec && std::filesystem::exists(marker, ec)) {
-        std::filesystem::remove(marker, ec);
-        app.sky.useImage = false;
-        app.sky.status = "Le dernier lancement s'est arrêté pendant le calcul du ciel en image : "
-                         "ciel procédural utilisé (réactivable dans ce panneau)";
-        std::cerr << app.sky.status << "\n";
-    }
     if (app.sky.useImage) {
-        if (!ec) std::ofstream(marker).put('1');
-        GLuint tex = bakeSkyFromImage(shaderDir, vao, size, app.sky);
-        if (!ec) std::filesystem::remove(marker, ec);
-        if (tex) return tex;
-    } else if (app.sky.status.rfind("Le dernier", 0) != 0) {   // garde le message ci-dessus
+        if (GLuint tex = bakeSkyFromImage(shaderDir, vao, size, app.sky)) return tex;
+    } else {
         app.sky.status = "Ciel procédural";
     }
     app.sky.rebuild = false;
