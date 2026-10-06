@@ -71,8 +71,19 @@ add_executable(blackhole
     src/binary.cpp
     src/binary_gfx.cpp
     src/ui_binary.cpp
+    src/sky_image.cpp
+    src/sky_loaders.cpp
+    src/ui_sky.cpp
 )
 target_link_libraries(blackhole PRIVATE glfw glad imgui)
+# Lecture des images du fond de ciel (en-têtes seuls) : stb_image et tinyexr.
+target_include_directories(blackhole PRIVATE external/stb external/tinyexr)
+# Code tiers : pas d'avertissements.
+if(MSVC)
+    set_source_files_properties(src/sky_loaders.cpp PROPERTIES COMPILE_OPTIONS "/W0")
+else()
+    set_source_files_properties(src/sky_loaders.cpp PROPERTIES COMPILE_OPTIONS "-w")
+endif()
 
 # Les shaders sont lus depuis les sources : on peut les modifier et
 # appuyer sur R pour les recharger sans recompiler.

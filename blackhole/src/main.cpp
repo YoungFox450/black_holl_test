@@ -50,6 +50,9 @@
 //   --rotation D    : période de rotation de l'étoile en jours (après --star / --mass)
 //   --quasar        : trou noir supermassif avec disque brillant et jets
 //   --binary        : système double, étoile compagne dont le gaz est arraché
+//   --sky-image F   : fond de ciel à partir de l'image F (.hdr, .exr, .jpg, .png)
+//   --procedural-sky: fond de ciel procédural au lieu de la vraie Voie lactée
+//   --sky-tilt A / --sky-yaw A : orientation de la Voie lactée (degrés)
 //   --bh-mass M     : masse du trou noir (masses solaires)
 //   --field N       : ajoute un champ de N astéroïdes
 //   --advance T     : fait avancer les astéroïdes de T unités de temps avant l'image
@@ -59,6 +62,7 @@
 
 #include "app.hpp"
 #include "binary_gfx.hpp"
+#include "sky_image.hpp"
 #include "shader.hpp"
 #include "ui.hpp"
 #include "star.hpp"
@@ -186,6 +190,19 @@ GLuint bakeSky(const Programs& prog, GLuint vao, int size)
 
     glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
     return tex;
+}
+
+// Fond de ciel : la vraie Voie lactée si l'image se charge, sinon le ciel
+// procédural.
+GLuint makeSky(const Programs& prog, GLuint vao, int size, App& app)
+{
+    if (app.sky.useImage) {
+        if (GLuint tex = bakeSkyFromImage(shaderDir, vao, size, app.sky)) return tex;
+    } else {
+        app.sky.status = "Ciel procédural";
+    }
+    app.sky.rebuild = false;
+    return bakeSky(prog, vao, size);
 }
 
 // Image (basse résolution) dans laquelle le ray tracer dessine.
@@ -961,6 +978,10 @@ int main(int argc, char** argv)
         else if (arg == "--rotation" && hasValue) { app.star.rotationDays = std::max(std::atof(argv[++i]), 1e-5); app.starIndex = -1; }
         else if (arg == "--quasar") applyQuasar(app);
         else if (arg == "--binary") applyBinary(app);
+        else if (arg == "--sky-image" && hasValue) app.sky.path = argv[++i];
+        else if (arg == "--procedural-sky") app.sky.useImage = false;
+        else if (arg == "--sky-tilt" && hasValue) app.sky.tilt = float(std::atof(argv[++i]));
+        else if (arg == "--sky-yaw" && hasValue) app.sky.yaw = float(std::atof(argv[++i]));
         else if (arg == "--bh-mass" && hasValue) app.massSolar = float(std::atof(argv[++i]));
         else if (arg == "--field" && hasValue) fieldCount = std::max(0, std::atoi(argv[++i]));
         else if (arg == "--advance" && hasValue) advance = std::atof(argv[++i]);
@@ -1024,7 +1045,7 @@ int main(int argc, char** argv)
     glGenVertexArrays(1, &vao);
 
     auto bakeStart = std::chrono::steady_clock::now();
-    GLuint skyTex = bakeSky(prog, vao, skySize);
+    GLuint skyTex = makeSky(prog, vao, skySize, app);
     std::cout << "Fond de ciel " << skySize << "x" << skySize << "x6 calculé en "
               << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - bakeStart).count()
               << " ms\n";
@@ -1076,9 +1097,13 @@ int main(int argc, char** argv)
                 prog.destroy();
                 prog = fresh;
                 glDeleteTextures(1, &skyTex);
-                skyTex = bakeSky(prog, vao, skySize);
+                skyTex = makeSky(prog, vao, skySize, app);
                 std::cout << "Shaders rechargés\n";
             }
+        }
+        if (app.sky.rebuild) {   // source ou orientation du ciel changée dans le panneau
+            glDeleteTextures(1, &skyTex);
+            skyTex = makeSky(prog, vao, skySize, app);
         }
 
         handleHeldKeys(window, app, dt);
