@@ -57,6 +57,7 @@ add_executable(blackhole
     src/main.cpp
     src/shader.cpp
     src/ui.cpp
+    src/ui_kit.cpp
     src/star.cpp
 )
 target_link_libraries(blackhole PRIVATE glfw glad imgui)
@@ -64,7 +65,8 @@ target_link_libraries(blackhole PRIVATE glfw glad imgui)
 # Les shaders sont lus depuis les sources : on peut les modifier et
 # appuyer sur R pour les recharger sans recompiler.
 target_compile_definitions(blackhole PRIVATE
-    BH_SHADER_DIR="${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+    BH_SHADER_DIR="${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+    BH_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
 
 # Exécutable toujours dans build/bin (même avec Visual Studio multi-config),
 # pour que .vscode/launch.json le trouve.
