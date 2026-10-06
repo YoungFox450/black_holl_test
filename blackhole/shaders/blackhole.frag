@@ -29,6 +29,16 @@ uniform int   uDisk;      // 1 = disque d'accrétion visible
 uniform int   uMaxSteps;  // nombre max de pas d'intégration par rayon
 uniform samplerCube uSky; // fond de galaxie précalculé (voir sky.frag)
 
+// Étoile compagne d'un système double (src/binary.*). uCompanion.w = 0 : pas d'étoile.
+uniform vec4  uCompanion;        // xyz : centre, w : demi-axe perpendiculaire (rs)
+uniform vec3  uCompAxis;         // direction de l'étoile vers le trou noir
+uniform float uCompStretch;      // allongement de marée le long de uCompAxis (1 = sphère)
+uniform vec3  uCompVel;          // vitesse orbitale (fraction de c)
+uniform float uCompTemp;         // température de surface (K)
+uniform float uCompBrightness;
+uniform float uCompIrradiation;  // température ajoutée par les rayons X du disque (K)
+uniform float uCompAngle;        // angle de l'orbite (l'étoile montre toujours la même face)
+
 // Réglages du disque d'accrétion (panneau de contrôle, voir src/ui.cpp).
 uniform float uDiskIn;          // rayon intérieur (3 rs = ISCO)
 uniform float uDiskOut;         // rayon extérieur
@@ -221,6 +231,71 @@ vec3 jetEmission(vec3 p, vec3 rayDir)
 }
 
 // -----------------------------------------------------------------------------
+//  Étoile compagne (système double)
+//
+//  L'étoile est un ellipsoïde allongé vers le trou noir par la marée. Le ray
+//  tracer teste chaque segment du rayon courbé contre elle : sa lumière est
+//  donc déviée comme celle du disque, et on voit une seconde image de
+//  l'étoile de l'autre côté du trou noir quand elle passe derrière.
+//  Pour l'intersection, on comprime l'espace le long de l'axe de marée :
+//  l'ellipsoïde devient une sphère de rayon uCompanion.w.
+// -----------------------------------------------------------------------------
+vec3 squashCompanion(vec3 v)
+{
+    return v + uCompAxis * dot(v, uCompAxis) * (1.0 / uCompStretch - 1.0);
+}
+
+// Fraction (0..1) du segment a -> b où il entre dans l'étoile, ou -1.
+float companionHit(vec3 a, vec3 b)
+{
+    vec3 A = squashCompanion(a - uCompanion.xyz);
+    vec3 D = squashCompanion(b - uCompanion.xyz) - A;
+    float qa = dot(D, D);
+    float qb = dot(A, D);
+    float qc = dot(A, A) - uCompanion.w * uCompanion.w;
+    float disc = qb * qb - qa * qc;
+    if (disc < 0.0 || qc < 0.0) return -1.0;   // manqué, ou caméra dans l'étoile
+    float t = (-qb - sqrt(disc)) / qa;
+    return (t >= 0.0 && t <= 1.0) ? t : -1.0;
+}
+
+vec3 companionColor(vec3 p, vec3 rayDir)
+{
+    // Normale de l'ellipsoïde : gradient de |squash(p - c)|².
+    vec3 n = normalize(squashCompanion(squashCompanion(p - uCompanion.xyz)));
+    vec3 toCam = -normalize(rayDir);
+    vec3 toHole = -normalize(p);
+
+    // Assombrissement centre-bord : au bord, on voit des couches plus hautes et plus froides.
+    float mu = max(dot(n, toCam), 0.0);
+    float limb = 1.0 - 0.7 * (1.0 - mu);
+
+    // Assombrissement gravitationnel (von Zeipel, T ∝ g^1/4) : la pointe vers
+    // L1, où la gravité de l'étoile est presque annulée, est plus froide.
+    float tip = max(dot(n, uCompAxis), 0.0);
+    float T = uCompTemp * (1.0 - 0.2 * (uCompStretch - 1.0) * tip * tip * tip);
+
+    // La face tournée vers le trou noir est chauffée par les rayons X du disque.
+    float lit = max(dot(n, toHole), 0.0);
+    float Tirr = uCompIrradiation * sqrt(lit);
+    T = pow(T * T * T * T + Tirr * Tirr * Tirr * Tirr, 0.25);
+
+    // Granulation, fixe sur l'étoile (rotation synchrone avec l'orbite).
+    float ca = cos(uCompAngle), sa = sin(uCompAngle);
+    vec3 nl = vec3(ca * n.x + sa * n.z, n.y, -sa * n.x + ca * n.z);
+    float gran = fbm(nl * 7.0 + vec3(0.0, uTime * 0.0004, 0.0), 3);
+    T *= 0.94 + 0.12 * gran;
+
+    // Effet Doppler (vitesse orbitale) et décalage gravitationnel.
+    float b2 = dot(uCompVel, uCompVel);
+    float dop = 1.0 / (sqrt(1.0 - b2) * (1.0 - dot(uCompVel, toCam)));
+    float g = mix(1.0, dop, uDoppler) * mix(1.0, sqrt(max(1.0 - RS / length(p), 0.0)), uGravShift);
+
+    float boost = pow(T / uCompTemp, 2.0);
+    return blackbody(T * g) * pow(g, 4.0) * limb * boost * uCompBrightness;
+}
+
+// -----------------------------------------------------------------------------
 //  Équation des géodésiques nulles (trajectoires de la lumière).
 //
 //  En Schwarzschild, la trajectoire d'un photon vérifie (équation de Binet) :
@@ -294,14 +369,25 @@ void main()
         if (uJets > 0.0)
             color += (1.0 - alpha) * jetEmission(0.5 * (prev + pos), vel) * dt;
 
+        // L'étoile compagne est-elle sur ce segment ?
+        float tComp = uCompanion.w > 0.0 ? companionHit(prev, pos) : -1.0;
+
         // Le rayon a-t-il traversé le plan du disque pendant ce pas ?
-        if (uDisk == 1 && prev.y * pos.y < 0.0) {
+        // (Seulement devant l'étoile compagne si elle est sur le segment.)
+        if (uDisk == 1 && prev.y * pos.y < 0.0 && (tComp < 0.0 || prev.y / (prev.y - pos.y) < tComp)) {
             float t = prev.y / (prev.y - pos.y);
             vec3 hit = mix(prev, pos, t);
             vec4 d = accretionDisk(hit, vel);
             color += (1.0 - alpha) * d.rgb * d.a;
             alpha += (1.0 - alpha) * d.a;
             if (alpha > 0.99) break;
+        }
+
+        // L'étoile est opaque : le rayon s'arrête sur sa surface.
+        if (tComp >= 0.0) {
+            color += (1.0 - alpha) * companionColor(mix(prev, pos, tComp), vel);
+            alpha = 1.0;
+            break;
         }
     }
 
