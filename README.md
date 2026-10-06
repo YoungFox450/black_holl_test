@@ -258,6 +258,7 @@ La physique (équation des photons, horizon, disque, Doppler, modèle des
 | 11. Système double | Étoile compagne déformée par la marée, gaz arraché par le point L1 jusqu'au disque, anneau d'Einstein |
 | 12. Couronne et vent | Couronne, protubérances, éjections de masse coronale (`M`) et vent stellaire déduits de l'activité de l'étoile |
 | 13. Vrai ciel | Voie lactée en HDR à partir de catalogues réels, cartes `.hdr` / `.exr` / `.jpg` chargeables, gardée en RGB9_E5 (32 Mo au lieu de 100) |
+| 14. Quasar plus rapide | Pas courts seulement près de l'axe des jets : mode quasar 35 % plus rapide (85 → 55 ms par image en 960x540), même rendu |
 
 ## Pistes pour la suite
 
