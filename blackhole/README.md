@@ -175,31 +175,40 @@ cmake --build build --config Release
 
 ## Panneau de contrôle
 
-Un panneau (Dear ImGui) s'affiche en haut à gauche ; `F1` ou `Tab` le cache.
-Il règle sans raccourci clavier :
+Un panneau (Dear ImGui, police Inter) occupe le bord gauche ; `F1`, `Tab`
+ou la croix le cachent, et la pastille qui reste en haut à gauche le rouvre.
 
 ![panneau de contrôle](docs/panneau.jpg)
 ![panneau en mode étoile](docs/panneau-etoile.jpg)
 
+De haut en bas :
 
-- **Simulation** : pause, vitesse du temps, retour à t = 0.
-- **Trou noir** : masse en masses solaires. L'image ne change pas (tout est
-  calculé en rs), mais le panneau convertit en vraies grandeurs : taille de
-  l'horizon, de la sphère de photons, de la dernière orbite stable, durée
-  d'un tour, temps écoulé.
-- **Disque d'accrétion** : rayons intérieur et extérieur, température
-  maximale, luminosité, nombre d'amas chauds, et on peut couper l'effet
-  Doppler ou le décalage gravitationnel pour voir leur rôle.
+- **Lecture / pause** et **vitesse du temps**, toujours visibles, avec le
+  temps écoulé (en rs/c et en temps réel pour la masse choisie).
 - **Scène** : trou noir ou étoile (`E`).
-- **Étoile** : choix d'une étoile connue (Soleil, Proxima du Centaure,
-  Sirius A et B, Rigel, Bételgeuse, Aldébaran, étoile à neutrons), création
-  d'une étoile de la séquence principale ou d'une naine blanche à partir de
-  sa masse, réglage libre de la masse, du rayon, de la température, de la
-  rotation et de l'activité. Le panneau affiche ce que la physique en déduit :
-  couleur, type et classe spectrale, luminosité, gravité, compacité rs/R.
-- **Caméra** : distance, angles, champ de vision, orbite automatique.
-- **Rendu** : FPS et temps GPU, résolution (auto ou fixe), FPS visé, pas
-  max par rayon, exposition, rechargement des shaders.
+- **Onglet Objet** :
+  - trou noir : masse en masses solaires. L'image ne change pas (tout est
+    calculé en rs), mais le panneau donne les vraies grandeurs : horizon,
+    sphère de photons, dernière orbite stable, durée d'un tour ;
+  - disque d'accrétion : bords intérieur et extérieur, température,
+    luminosité, amas chauds, et interrupteurs pour couper l'effet Doppler ou
+    le décalage gravitationnel ;
+  - étoile : étoile connue (Soleil, Proxima du Centaure, Sirius A et B,
+    Rigel, Bételgeuse, Aldébaran, étoile à neutrons), création d'une étoile
+    comme le Soleil ou d'une naine blanche à partir de sa masse, réglages
+    fins, et ce que la physique en déduit (luminosité, gravité, compacité).
+- **Onglet Vue** : distance, angles, champ de vision, orbite automatique.
+- **Onglet Rendu** : résolution (auto ou fixe), FPS visé, pas max par rayon,
+  mesures, exposition, rechargement des shaders.
+- **Onglet Aide** : souris et raccourcis clavier.
+- **Ligne d'état** : FPS (vert, orange ou rouge selon l'objectif),
+  résolution du calcul, temps GPU.
+
+Chaque réglage a une bulle d'aide (le petit `?`) ; `Ctrl + clic` sur un
+curseur permet de taper une valeur.
+
+Pour ajouter une section au panneau depuis un autre fichier, voir l'exemple
+en tête de `src/ui_kit.hpp` (macros `UI_SECTION` et `UI_SCENE`).
 
 Quand la souris est sur le panneau, elle ne fait pas tourner la caméra.
 
