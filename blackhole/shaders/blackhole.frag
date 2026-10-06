@@ -200,6 +200,8 @@ vec4 accretionDisk(vec3 p, vec3 rayDir)
 //  cela que beaucoup de quasars ne montrent qu'un seul jet.
 //  Les "nœuds" sont des chocs internes qui remontent le jet.
 // -----------------------------------------------------------------------------
+float gJetGamma;   // facteur de Lorentz des jets, calculé une fois par pixel dans main()
+
 vec3 jetEmission(vec3 p, vec3 rayDir)
 {
     float ay = abs(p.y);
@@ -212,9 +214,8 @@ vec3 jetEmission(vec3 p, vec3 rayDir)
     float knots = 0.45 + 0.9 * pow(noise3(vec3(side * 7.0, ay * 0.3 - uTime * 0.02, 0.0)), 2.0);
 
     vec3 jetDir = vec3(0.0, side, 0.0);
-    float gamma = 1.0 / sqrt(1.0 - uJetBeta * uJetBeta);
     float cosTheta = dot(jetDir, -normalize(rayDir));
-    float delta = 1.0 / (gamma * (1.0 - uJetBeta * cosTheta));
+    float delta = 1.0 / (gJetGamma * (1.0 - uJetBeta * cosTheta));
     float beaming = mix(1.0, delta * delta * delta, uDoppler);
 
     // Rayonnement synchrotron : bleuté, coeur plus blanc.
@@ -237,7 +238,7 @@ vec3 geodesicAccel(vec3 x, float h2)
 {
     float r2 = dot(x, x);
     float r5 = r2 * r2 * sqrt(r2);
-    return -1.5 * RS * uLensing * h2 * x / r5;
+    return -1.5 * RS * h2 * x / r5;   // appelé seulement avec la lentille
 }
 
 void main()
@@ -258,6 +259,7 @@ void main()
     vec3  color = vec3(0.0);
     float alpha = 0.0;           // opacité accumulée (disque semi-transparent)
     bool  captured = false;
+    gJetGamma = inversesqrt(1.0 - uJetBeta * uJetBeta);
 
     for (int i = 0; i < uMaxSteps; ++i) {
         float r = length(pos);
@@ -280,19 +282,26 @@ void main()
         float dt = clamp(STEP * r, 0.02, 8.0);
         if (uJets > 0.0) dt = min(dt, 0.3 + 0.08 * r);   // jets fins : pas plus courts
 
-        // Intégration Runge-Kutta d'ordre 4.
-        vec3 k1v = geodesicAccel(pos, h2);
-        vec3 k1x = vel;
-        vec3 k2v = geodesicAccel(pos + 0.5 * dt * k1x, h2);
-        vec3 k2x = vel + 0.5 * dt * k1v;
-        vec3 k3v = geodesicAccel(pos + 0.5 * dt * k2x, h2);
-        vec3 k3x = vel + 0.5 * dt * k2v;
-        vec3 k4v = geodesicAccel(pos + dt * k3x, h2);
-        vec3 k4x = vel + dt * k3v;
-
         vec3 prev = pos;
-        pos += dt / 6.0 * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
-        vel += dt / 6.0 * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
+        if (uLensing < 0.5) {
+            // Sans lentille le rayon va tout droit : un pas exact, sans les
+            // quatre évaluations de Runge-Kutta (même branche pour tous les
+            // pixels, donc gratuite sur le GPU).
+            pos += dt * vel;
+        } else {
+            // Intégration Runge-Kutta d'ordre 4.
+            vec3 k1v = geodesicAccel(pos, h2);
+            vec3 k1x = vel;
+            vec3 k2v = geodesicAccel(pos + 0.5 * dt * k1x, h2);
+            vec3 k2x = vel + 0.5 * dt * k1v;
+            vec3 k3v = geodesicAccel(pos + 0.5 * dt * k2x, h2);
+            vec3 k3x = vel + 0.5 * dt * k2v;
+            vec3 k4v = geodesicAccel(pos + dt * k3x, h2);
+            vec3 k4x = vel + dt * k3v;
+
+            pos += dt / 6.0 * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
+            vel += dt / 6.0 * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
+        }
 
         if (uJets > 0.0)
             color += (1.0 - alpha) * jetEmission(0.5 * (prev + pos), vel) * dt;

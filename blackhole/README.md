@@ -326,7 +326,7 @@ Options :
 | `--advance T` | fait avancer les astéroïdes de T unités de temps avant l'image (rs/c, ou secondes pour une étoile) |
 
 Image fixe sans fenêtre (pleine résolution) :
-`blackhole --screenshot rendu.ppm --width 1920 --height 1080 [--no-disk] [--time T] [--yaw A] [--pitch A] [--distance D]`
+`blackhole --screenshot rendu.ppm --width 1920 --height 1080 [--no-disk] [--no-lensing] [--time T] [--yaw A] [--pitch A] [--distance D]`
 
 ## Pistes pour la suite
 
