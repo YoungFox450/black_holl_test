@@ -99,6 +99,18 @@ Limite connue : les astéroïdes ne sont pas déviés par la lentille
 gravitationnelle (leur lumière va en ligne droite jusqu'à la caméra), et ils
 ne s'attirent pas entre eux.
 
+## Système double
+
+Une étoile compagne tourne autour du trou noir et le trou noir lui arrache
+son gaz, comme dans les binaires X (Cygnus X-1, A0620-00). L'étoile est
+étirée en goutte par la marée, le gaz part du point de Lagrange L1 et
+alimente le disque ; quand elle passe derrière le trou noir, sa lumière
+déviée forme un anneau d'Einstein. Panneau : onglet Objet, carte « Système
+double » ; ligne de commande : `--binary`. Détails des modèles dans
+[`blackhole/README.md`](blackhole/README.md#système-double).
+
+![Système double](blackhole/docs/binaire.jpg)
+
 ## Démarrage rapide
 
 Outils : **VS Code**, **CMake ≥ 3.16**, **git** et un **compilateur C++17**
@@ -178,6 +190,7 @@ Les détails et les mesures sont dans
     │   ├── sky.frag          fond de galaxie, calculé une fois en cubemap
     │   ├── star.frag         ray tracing d'une étoile, pulsar, magnétar
     │   ├── asteroid.vert/.frag  astéroïdes dessinés en points
+    │   ├── gas.vert/.frag    gaz arraché à l'étoile compagne
     │   ├── present.frag      agrandissement et tone mapping
     │   ├── noise.glsl        fonctions de bruit partagées
     │   └── fullscreen.vert   triangle plein écran
@@ -194,6 +207,9 @@ Les détails et les mesures sont dans
         ├── star.cpp/.hpp     modèles physiques des étoiles et étoiles à neutrons
         ├── activity.cpp/.hpp activité magnétique : taches, cycle, éruptions
         ├── asteroids.cpp/.hpp  orbites, capture, marées, fonte des astéroïdes
+        ├── binary.cpp/.hpp   système double : orbite, marée, transfert de gaz
+        ├── binary_gfx.cpp/.hpp  dessin du gaz
+        ├── ui_binary.cpp     carte « Système double »
         └── shader.cpp/.hpp   chargement et compilation des shaders
 ```
 
@@ -214,6 +230,7 @@ La physique (équation des photons, horizon, disque, Doppler, modèle des
 | 8. Nouveau panneau | Thème moderne avec onglets et cartes, police Inter, étoiles 2,5 fois plus rapides |
 | 9. Activité et objets compacts | Activité des étoiles par lois physiques ; pulsars, magnétars, quasar et astéroïdes |
 | 10. Touches et réglages | Onglet Touches, lentille désactivable (`V`, 60 % d'images en plus sans lentille), pas à pas (`T`), nouveaux réglages |
+| 11. Système double | Étoile compagne déformée par la marée, gaz arraché par le point L1 jusqu'au disque, anneau d'Einstein |
 
 ## Pistes pour la suite
 
