@@ -153,6 +153,14 @@ La physique (équation des photons, horizon, disque, Doppler, modèle des
 
 ## Pistes pour la suite
 
+En préparation (PR ouvertes) :
+
+- activité des étoiles calculée à partir de leur rotation et de leur type
+  (taches, cycle, éruptions, oscillations) ;
+- pulsars et magnétars, quasar avec jets relativistes, astéroïdes en orbite.
+
+Idées pour la suite :
+
 - Trou noir en rotation (métrique de Kerr) : ombre asymétrique.
 - Anti-aliasing (plusieurs rayons par pixel) et bloom autour du disque.
 - Fond de ciel à partir d'une vraie image HDR de la Voie lactée.
