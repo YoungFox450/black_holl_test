@@ -25,6 +25,7 @@ uniform int   uDisk;
 uniform float uDiskIn;
 uniform float uDiskOut;
 uniform float uLightScale;  // eclairement a r = 1 (decroit en 1/r^2)
+uniform float uSizeScale;   // taille d'affichage choisie dans le panneau
 
 out vec3  vLightDir;   // vers le corps central, repere de la camera
 out float vHeat;
@@ -43,7 +44,7 @@ void main()
     // a 10 rs d'un trou noir de 10 soleils serait mille fois plus petit
     // qu'un pixel).
     float size = (1.5 + 0.9 * log2(1.0 + aInfo.x)) * (uResY / 360.0) * 12.0 / max(z, 0.1);
-    gl_PointSize = clamp(size, 1.5, 14.0);
+    gl_PointSize = clamp(size * uSizeScale, 1.5, 14.0 * uSizeScale);
 
     float dim = 1.0;
     // Cache derriere le corps central.

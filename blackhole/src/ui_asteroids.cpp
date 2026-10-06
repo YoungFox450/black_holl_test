@@ -50,6 +50,18 @@ void asteroidCard(App& app)
     } else {
         ui::value("Dernière orbite stable", "3 rs");
     }
+    ui::toggle("Marées (dislocation)", &ast.tides,
+               "Coupé : les astéroïdes ne se disloquent plus sous la limite de "
+               "Roche. Utile autour d'une étoile à neutrons, où cette limite "
+               "est à ~70 000 rayons : tout astéroïde y est brisé aussitôt.");
+    if (!body.blackHole) {
+        ui::toggle("Chaleur (fonte)", &ast.heating,
+                   "Coupé : les astéroïdes chauffent (ils rougeoient) mais ne "
+                   "fondent plus.");
+        if (ast.heating)
+            ui::slider("Vitesse de fonte", &ast.meltSpeed, 0.05, 5.0, "× %.2f",
+                       "Ralentit ou accélère la fonte affichée.", true);
+    }
     ui::note("Sous la limite de Roche, les marées dépassent la gravité propre de "
              "l'astéroïde : il se disloque en morceaux qui s'étalent sur l'orbite. "
              "Elle est immense autour d'un trou noir stellaire ou d'une étoile à "

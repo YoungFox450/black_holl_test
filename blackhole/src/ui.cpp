@@ -2,7 +2,7 @@
 // l'image. F1 (ou Tab) l'affiche ou le cache.
 //
 // Mise en page : en-tête, lecture / vitesse du temps, choix de la scène,
-// onglets (Objet, Vue, Rendu, Aide), puis les sections de l'onglet dans des
+// onglets (Objet, Vue, Rendu, Touches), puis les sections de l'onglet dans des
 // cartes, et une ligne d'état en bas. Les sections sont enregistrées avec
 // UI_SECTION (voir ui_kit.hpp) : d'autres fichiers peuvent en ajouter.
 
@@ -32,7 +32,7 @@ constexpr double kSunRsKm = 2.9532;
 constexpr double kSunRsOverCSeconds = 9.8510e-6;
 
 UiStats gStats;   // mesures de l'image en cours, pour les sections
-int gTab = 0;     // onglet affiché : 0 Objet, 1 Vue, 2 Rendu, 3 Aide
+int gTab = 0;     // onglet affiché : 0 Objet, 1 Vue, 2 Rendu, 3 Touches
 
 // "3,2 ms", "4,1 h", "12 ans"...
 void formatDuration(double seconds, char* out, size_t size)
@@ -244,6 +244,10 @@ void cameraCard(App& app)
     if (ui::slider("Champ de vision", &fovDeg, 20.0f, 120.0f, "%.0f°"))
         cam.fovY = fovDeg / kRad2Deg;
     ui::toggle("Orbite automatique", &cam.autoOrbit, "Touche Espace.");
+    if (cam.autoOrbit)
+        ui::slider("Vitesse de l'orbite", &cam.autoOrbitSpeed, -0.6f, 0.6f, "%.2f rad/s",
+                   "Négative : dans l'autre sens.");
+    ui::slider("Sensibilité de la souris", &app.mouseSensitivity, 0.2f, 3.0f, "× %.2f", nullptr, true);
     if (ui::button("Recentrer la vue"))
         resetCamera(app);
 }
@@ -272,79 +276,16 @@ UI_SECTION(ui::Tab::Render, 10, "Performance", performanceCard);
 void imageCard(App& app)
 {
     ui::slider("Exposition", &app.exposure, 0.2f, 4.0f, "%.2f", nullptr, true);
+    ui::slider("Fond de galaxie", &app.skyBrightness, 0.0f, 3.0f, "× %.2f",
+               "0 : ciel noir, pour mieux voir le disque, les jets ou les astéroïdes.");
+    ui::slider("Taille des astéroïdes", &app.asteroidScale, 0.3f, 3.0f, "× %.2f",
+               "Taille d'affichage seulement (ils sont dessinés plus gros qu'en "
+               "vrai pour rester visibles).", true);
     if (ui::button("Recharger les shaders"))
         app.reloadRequested = true;
     ImGui::SetItemTooltip("Touche R : relit les fichiers .frag sans relancer.");
 }
 UI_SECTION(ui::Tab::Render, 20, "Image", imageCard);
-
-// --- Onglet Aide -----------------------------------------------------------------
-
-// Touche dessinée comme une petite touche de clavier.
-void keycap(const char* key)
-{
-    ImGui::PushFont(ui::boldFont());
-    const ImVec2 ts = ImGui::CalcTextSize(key);
-    const float padX = ImGui::GetFontSize() * 0.4f;
-    const float h = ImGui::GetTextLineHeight() + 4.0f;
-    const ImVec2 p = ImGui::GetCursorScreenPos();
-    const ImVec2 size(std::max(ts.x + 2.0f * padX, h), h);
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y), ImGui::GetColorU32(ImGuiCol_FrameBg), 5.0f);
-    dl->AddRect(p, ImVec2(p.x + size.x, p.y + size.y), ImGui::GetColorU32(ImGuiCol_Border), 5.0f);
-    dl->AddText(ImVec2(p.x + (size.x - ts.x) * 0.5f, p.y + (size.y - ts.y) * 0.5f),
-                ImGui::GetColorU32(ImGuiCol_Text), key);
-    ImGui::Dummy(size);
-    ImGui::PopFont();
-}
-
-void shortcutRow(std::initializer_list<const char*> keys, const char* action)
-{
-    ImGui::TableNextRow();
-    ImGui::TableNextColumn();
-    bool first = true;
-    for (const char* k : keys) {
-        if (!first) ImGui::SameLine(0.0f, 4.0f);
-        keycap(k);
-        first = false;
-    }
-    ImGui::TableNextColumn();
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 2.0f);   // centré sur la touche
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::color::muted), "%s", action);
-}
-
-void helpTab()
-{
-    ui::beginCard("Souris");
-    ui::value("Clic gauche + glisser", "tourner autour");
-    ui::value("Molette", "zoom");
-    ui::endCard();
-
-    ui::beginCard("Clavier");
-    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(ImGui::GetFontSize() * 0.5f, 2.0f));
-    if (ImGui::BeginTable("##touches", 2, ImGuiTableFlags_SizingFixedFit)) {
-        ImGui::TableSetupColumn("touches", ImGuiTableColumnFlags_WidthFixed);
-        ImGui::TableSetupColumn("action", ImGuiTableColumnFlags_WidthStretch);
-        shortcutRow({"F1"}, "cacher ce panneau");
-        shortcutRow({"Espace"}, "orbite automatique");
-        shortcutRow({"P"}, "pause");
-        shortcutRow({"+", "-"}, "vitesse du temps");
-        shortcutRow({"C"}, "recentrer");
-        shortcutRow({"E"}, "trou noir / étoile");
-        shortcutRow({"N", "B"}, "étoile suivante / préc.");
-        shortcutRow({"I", "U"}, "étoile plus / moins lourde");
-        shortcutRow({"H"}, "disque d'accrétion");
-        shortcutRow({"J"}, "jets du quasar");
-        shortcutRow({"F", "G", "X"}, "champ / astéroïde / retirer");
-        shortcutRow({"K", "L", "O"}, "résolution");
-        shortcutRow({"R"}, "recharger les shaders");
-        shortcutRow({"Échap"}, "quitter");
-        ImGui::EndTable();
-    }
-    ImGui::PopStyleVar();
-    ui::note("Flèches ou ZQSD : tourner. Page haut / bas : zoom.");
-    ui::endCard();
-}
 
 // --- Éléments fixes du panneau ---------------------------------------------------
 
@@ -447,7 +388,7 @@ void sceneSelector(App& app)
 // Onglets soulignés.
 void tabBar()
 {
-    static const char* const tabs[] = {"Objet", "Vue", "Rendu", "Aide"};
+    static const char* const tabs[] = {"Objet", "Vue", "Rendu", "Touches"};
     const int count = 4;
     const float w = ImGui::GetContentRegionAvail().x;
     const float h = ImGui::GetFrameHeight() + 2.0f;
@@ -482,7 +423,7 @@ void tabBar()
 void tabContent(App& app)
 {
     if (gTab == 3) {
-        helpTab();
+        ui::keysTab(app);
         return;
     }
     const ui::Tab tab = static_cast<ui::Tab>(gTab);
@@ -629,6 +570,7 @@ void uiDraw(App& app, const UiStats& stats)
 
     if (app.showUi) panel(app);
     else collapsedPill(app);
+    ui::toastOverlay(app);
 
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

@@ -48,7 +48,7 @@ finit, le pixel prend la couleur :
   inférieure à 0,1°), ce qui les rend environ 2,5 fois plus rapides.
 - **Panneau de contrôle** (Dear ImGui, police Inter, `F1` ou `Tab`) : lecture
   et vitesse du temps toujours visibles, onglets Objet (trou noir, disque,
-  étoiles), Vue, Rendu et Aide, ligne d'état avec les FPS, bulle d'aide sur
+  étoiles), Vue, Rendu et Touches (toutes les touches, avec recherche), ligne d'état avec les FPS, bulle d'aide sur
   chaque réglage.
 
 ![Panneau de contrôle](blackhole/docs/panneau.jpg)
@@ -127,11 +127,13 @@ Le détail par système (paquets Linux, macOS) est dans
 | molette, Page↑ / Page↓ | zoom |
 | `Espace` | orbite automatique |
 | `P` / `+` / `-` | pause, accélérer, ralentir le temps |
+| `T` | avancer d'un pas pendant la pause |
 | `H` | afficher / cacher le disque |
 | `F1` ou `Tab` | afficher / cacher le panneau de contrôle |
 | `E` | passer du trou noir à une étoile, et retour |
 | `N` / `B` | étoile suivante / précédente |
 | `J` | jets relativistes (quasar) |
+| `V` | lentille gravitationnelle (marche / arrêt) |
 | `F` / `G` / `X` | champ d'astéroïdes, un astéroïde, tout retirer |
 | `K` / `L` / `O` | baisser, augmenter la résolution, ou la laisser automatique |
 | `Échap` | quitter |

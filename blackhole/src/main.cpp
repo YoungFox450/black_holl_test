@@ -28,8 +28,12 @@
 //   N / B                   : étoile suivante / précédente (Soleil, Bételgeuse...)
 //   I / U                   : étoile de la séquence principale plus / moins massive
 //   J                       : jets relativistes (quasar)
+//   V                       : lentille gravitationnelle (marche / arrêt)
+//   T                       : pendant la pause, avancer d'un pas de temps
 //   F / G                   : ajouter un champ d'astéroïdes / un astéroïde
 //   X                       : retirer tous les astéroïdes
+//   F1 ou Tab               : afficher / cacher le panneau (onglet Touches :
+//                             liste complète des touches)
 //   Échap                   : quitter
 //
 // Options :
@@ -77,7 +81,8 @@ struct Programs {
     GLint resolution = -1, time = -1, camPos = -1, camRight = -1, camUp = -1,
           camForward = -1, fovY = -1, disk = -1, maxSteps = -1, skyTex = -1;
     GLint diskIn = -1, diskOut = -1, diskTemp = -1, diskBrightness = -1, clumpCount = -1,
-          doppler = -1, gravShift = -1, jets = -1;
+          doppler = -1, gravShift = -1, jets = -1, jetBeta = -1, jetWidth = -1,
+          lensing = -1, skyGain = -1;
     GLint image = -1, outputSize = -1, exposure = -1;
 
     void destroy()
@@ -127,6 +132,10 @@ bool buildPrograms(Programs& out)
     p.doppler = glGetUniformLocation(p.trace, "uDoppler");
     p.gravShift = glGetUniformLocation(p.trace, "uGravShift");
     p.jets = glGetUniformLocation(p.trace, "uJets");
+    p.jetBeta = glGetUniformLocation(p.trace, "uJetBeta");
+    p.jetWidth = glGetUniformLocation(p.trace, "uJetWidth");
+    p.lensing = glGetUniformLocation(p.trace, "uLensing");
+    p.skyGain = glGetUniformLocation(p.trace, "uSkyGain");
 
     p.image = glGetUniformLocation(p.present, "uImage");
     p.outputSize = glGetUniformLocation(p.present, "uOutputSize");
@@ -248,6 +257,10 @@ void traceFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarg
     glUniform1f(prog.doppler, disk.doppler ? 1.0f : 0.0f);
     glUniform1f(prog.gravShift, disk.gravitationalShift ? 1.0f : 0.0f);
     glUniform1f(prog.jets, app.jets ? app.jetPower : 0.0f);
+    glUniform1f(prog.jetBeta, std::clamp(app.jetBeta, 0.0f, 0.995f));
+    glUniform1f(prog.jetWidth, app.jetWidth);
+    glUniform1f(prog.lensing, app.lensing ? 1.0f : 0.0f);
+    glUniform1f(prog.skyGain, app.skyBrightness);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, skyTex);
     glUniform1i(prog.skyTex, 0);
@@ -340,6 +353,8 @@ void traceStarFrame(const Programs& prog, GLuint vao, GLuint skyTex, const Trace
     glUniform1i(loc("uMaxSteps"), app.maxSteps);
     glUniform1f(loc("uStarTemp"), float(star.temperature));
     glUniform1f(loc("uCompact"), float(star.compactness()));
+    glUniform1f(loc("uLensing"), app.lensing ? 1.0f : 0.0f);
+    glUniform1f(loc("uSkyGain"), app.skyBrightness);
     glUniform1f(loc("uLimb"), float(star.limbDarkening()));
     glUniform1f(loc("uGranScale"), float(star.granulationScale()));
     glUniform1f(loc("uRotation"), float(rotation));
@@ -494,6 +509,7 @@ struct AsteroidRenderer {
         glUniform1f(loc("uLightScale"), scale);
         glUniform3f(loc("uLightColor"), lr, lg, lb);
         glUniform1f(loc("uAmbient"), ambient);
+        glUniform1f(loc("uSizeScale"), app.asteroidScale);
         glDrawArrays(GL_POINTS, 0, GLsizei(items.size()));
         glDisable(GL_PROGRAM_POINT_SIZE);
         glDisable(GL_BLEND);
@@ -558,8 +574,9 @@ void onCursorPos(GLFWwindow* window, double x, double y)
 {
     App* app = appOf(window);
     if (!app->dragging) return;
-    float dYaw = -float(x - app->lastX) * 0.005f;
-    float dPitch = float(y - app->lastY) * 0.005f;
+    const float k = 0.005f * app->mouseSensitivity;
+    float dYaw = -float(x - app->lastX) * k;
+    float dPitch = float(y - app->lastY) * k;
     app->camera.yaw += dYaw;
     app->camera.pitch = std::clamp(app->camera.pitch + dPitch, -kMaxPitch, kMaxPitch);
 
@@ -595,7 +612,10 @@ void onKey(GLFWwindow* window, int key, int, int action, int)
     if (uiWantsKeyboard()) return;   // saisie dans le panneau
     switch (key) {
     case GLFW_KEY_ESCAPE: glfwSetWindowShouldClose(window, GLFW_TRUE); break;
-    case GLFW_KEY_SPACE: app->camera.autoOrbit = !app->camera.autoOrbit; break;
+    case GLFW_KEY_SPACE:
+        app->camera.autoOrbit = !app->camera.autoOrbit;
+        notify(*app, std::string("Orbite automatique : ") + onOff(app->camera.autoOrbit));
+        break;
     default: break;
     }
 }
@@ -606,50 +626,89 @@ void onChar(GLFWwindow* window, unsigned int c)
 {
     if (uiWantsKeyboard()) return;
     App* app = appOf(window);
+    App& a = *app;
+    char buf[96];
     switch (c) {
-    case 'h': case 'H': app->showDisk = !app->showDisk; break;
-    case 'r': case 'R': app->reloadRequested = true; break;
-    case 'p': case 'P': app->paused = !app->paused; break;
-    case 'c': case 'C': resetCamera(*app); break;
-    case '+': app->simSpeed = std::min(app->simSpeed * 1.5f, 200.0f); break;
-    case '-': app->simSpeed = std::max(app->simSpeed / 1.5f, 0.25f); break;
-    case 'o': case 'O': app->autoScale = !app->autoScale; break;
-    case 'k': case 'K':
-        app->autoScale = false;
-        app->renderScale = std::max(kMinScale, app->renderScale - 0.05f);
+    case 'h': case 'H':
+        a.showDisk = !a.showDisk;
+        notify(a, std::string("Disque d'accrétion : ") + onOff(a.showDisk));
         break;
-    case 'l': case 'L':
-        app->autoScale = false;
-        app->renderScale = std::min(kMaxScale, app->renderScale + 0.05f);
+    case 'r': case 'R':
+        a.reloadRequested = true;
+        notify(a, "Shaders rechargés");
+        break;
+    case 'p': case 'P':
+        a.paused = !a.paused;
+        notify(a, a.paused ? "Pause (T : avancer d'un pas)" : "Lecture");
+        break;
+    case 't': case 'T':
+        if (a.paused) {
+            ++a.stepRequests;
+            notify(a, "Un pas de temps");
+        } else {
+            notify(a, "T avance d'un pas pendant la pause (P)");
+        }
+        break;
+    case 'c': case 'C':
+        resetCamera(a);
+        notify(a, "Caméra recentrée");
+        break;
+    case '+': case '-':
+        a.simSpeed = c == '+' ? std::min(a.simSpeed * 1.5f, 200.0f) : std::max(a.simSpeed / 1.5f, 0.25f);
+        std::snprintf(buf, sizeof(buf), "Vitesse du temps : × %.3g", a.simSpeed);
+        notify(a, buf);
+        break;
+    case 'o': case 'O':
+        a.autoScale = !a.autoScale;
+        notify(a, std::string("Résolution automatique : ") + onOff(a.autoScale));
+        break;
+    case 'k': case 'K': case 'l': case 'L':
+        a.autoScale = false;
+        a.renderScale = (c == 'k' || c == 'K') ? std::max(kMinScale, a.renderScale - 0.05f)
+                                               : std::min(kMaxScale, a.renderScale + 0.05f);
+        std::snprintf(buf, sizeof(buf), "Résolution : %.2f × fenêtre", a.renderScale);
+        notify(a, buf);
+        break;
+    case 'v': case 'V':
+        a.lensing = !a.lensing;
+        notify(a, std::string("Lentille gravitationnelle : ") + onOff(a.lensing));
         break;
     case 'e': case 'E':
-        setStarMode(*app, !app->starMode);
-        if (app->starMode) std::cout << app->star.summary() << "\n";
+        setStarMode(a, !a.starMode);
+        if (a.starMode) std::cout << a.star.summary() << "\n";
+        notify(a, a.starMode ? "Étoile : " + a.star.name : std::string("Trou noir"));
         break;
-    case 'n': case 'N':
-        setStarMode(*app, true);
-        selectPreset(*app, app->starIndex + 1);
+    case 'n': case 'N': case 'b': case 'B':
+        setStarMode(a, true);
+        selectPreset(a, a.starIndex + ((c == 'n' || c == 'N') ? 1 : -1));
+        notify(a, a.star.name);
         break;
-    case 'b': case 'B':
-        setStarMode(*app, true);
-        selectPreset(*app, app->starIndex - 1);
+    case 'i': case 'I': case 'u': case 'U':
+        setStarMode(a, true);
+        selectMainSequence(a, (c == 'i' || c == 'I') ? a.star.mass * 1.25 : a.star.mass / 1.25);
+        std::snprintf(buf, sizeof(buf), "Étoile de %.3g masses solaires", a.star.mass);
+        notify(a, buf);
         break;
-    case 'i': case 'I':
-        setStarMode(*app, true);
-        selectMainSequence(*app, app->star.mass * 1.25);
+    case 'j': case 'J':
+        a.jets = !a.jets;
+        notify(a, a.starMode ? std::string("Jets : ") + onOff(a.jets) + " (visibles autour du trou noir, touche E)"
+                             : std::string("Jets relativistes : ") + onOff(a.jets));
         break;
-    case 'u': case 'U':
-        setStarMode(*app, true);
-        selectMainSequence(*app, app->star.mass / 1.25);
+    case 'f': case 'F':
+        a.asteroids.addField(centralBody(a), a.field);
+        std::snprintf(buf, sizeof(buf), "Champ de %d astéroïdes ajouté", a.field.count);
+        notify(a, buf);
         break;
-    case 'j': case 'J': app->jets = !app->jets; break;
-    case 'f': case 'F': app->asteroids.addField(centralBody(*app), app->field); break;
     case 'g': case 'G': {
-        double r = 0.5 * (app->field.innerRadius + app->field.outerRadius);
-        app->asteroids.addOrbit(centralBody(*app), r, 1.0, 0.0, 0.0, 5.0f);
+        double r = 0.5 * (a.field.innerRadius + a.field.outerRadius);
+        a.asteroids.addOrbit(centralBody(a), r, 1.0, 0.0, 0.0, 5.0f);
+        notify(a, "Astéroïde ajouté");
         break;
     }
-    case 'x': case 'X': app->asteroids.clear(); break;
+    case 'x': case 'X':
+        a.asteroids.clear();
+        notify(a, "Astéroïdes retirés");
+        break;
     default: break;
     }
 }
@@ -947,6 +1006,12 @@ int main(int argc, char** argv)
         if (!app.paused) {
             app.simTime += double(dt) * app.simSpeed;
             app.asteroids.step(centralBody(app), sceneDt(app, dt));
+        } else if (app.stepRequests > 0) {
+            // Pas à pas (touche T) : 1/30 s de simulation à la vitesse choisie.
+            for (; app.stepRequests > 0; --app.stepRequests) {
+                app.simTime += app.simSpeed / 30.0;
+                app.asteroids.step(centralBody(app), sceneDt(app, 1.0 / 30.0));
+            }
         }
         if (app.starMode)
             updateStarActivity(app, app.simTime);
