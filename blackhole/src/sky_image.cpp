@@ -222,9 +222,27 @@ bool loadSkyImage(const std::string& path, int maxWidth, SkyImage& out, std::str
 
 namespace {
 
+// La texture source reste sur le GPU entre deux reconstructions : tourner le
+// ciel au curseur (une reconstruction par image) ne renvoie plus l'image.
+GLuint srcTex = 0;
+std::string srcPath;
+bool srcFloat = false;
+// Verdict du pilote sur RGB9_E5, valable pour toute la session :
+// 0 pas encore testé, 1 lu correctement, -1 lu en noir (on passe en RGB16F).
+int rgb9e5State = 0;
+
+void releaseSource()
+{
+    glDeleteTextures(1, &srcTex);
+    srcTex = 0;
+    srcPath.clear();
+}
+
 // Texture source : RGB9_E5 compacte, ou RGB16F décompressée sur le CPU.
 GLuint uploadSource(bool asFloat)
 {
+    if (srcTex && srcPath == cache.path && srcFloat == asFloat) return srcTex;
+    releaseSource();
     GLuint src = 0;
     glGenTextures(1, &src);
     glBindTexture(GL_TEXTURE_2D, src);
@@ -247,10 +265,13 @@ GLuint uploadSource(bool asFloat)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    srcTex = src;
+    srcPath = cache.path;
+    srcFloat = asFloat;
     return src;
 }
 
-// Projette l'image sur les 6 faces du cube, puis libère la source.
+// Projette l'image sur les 6 faces du cube (la source est gardée).
 GLuint renderSkyFaces(GLuint prog, GLuint vao, int faceSize, const SkySettings& s, GLuint src)
 {
     GLuint tex = 0;
@@ -287,7 +308,6 @@ GLuint renderSkyFaces(GLuint prog, GLuint vao, int faceSize, const SkySettings& 
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glDeleteFramebuffers(1, &fbo);
-    glDeleteTextures(1, &src);
 
     glBindTexture(GL_TEXTURE_CUBE_MAP, tex);
     glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
@@ -322,6 +342,7 @@ unsigned int bakeSkyFromImage(const std::string& shaderDir, unsigned int vao, in
         std::string error;
         GLint maxTex = 0;
         glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
+        releaseSource();
         if (!loadSkyImage(path, std::min(4096, std::max(int(maxTex), 1024)), cache, error)) {
             cache = SkyImage{};
             s.status = "Image illisible : " + path + " (" + error + ")";
@@ -340,22 +361,30 @@ unsigned int bakeSkyFromImage(const std::string& shaderDir, unsigned int vao, in
 
     // Certains pilotes (Intel sous Windows notamment) acceptent la texture
     // compacte RGB9_E5 mais la lisent en noir. On vérifie le résultat et on
-    // recommence avec une texture flottante classique si besoin.
-    GLuint tex = renderSkyFaces(prog, vao, faceSize, s, uploadSource(false));
-    const char* mode = "";
-    if (isBlack(tex, faceSize)) {
-        std::cerr << "Fond de ciel noir avec la texture RGB9_E5, nouvel essai en RGB16F\n";
-        glDeleteTextures(1, &tex);
-        tex = renderSkyFaces(prog, vao, faceSize, s, uploadSource(true));
-        mode = ", RGB16F";
-        if (isBlack(tex, faceSize)) {
+    // recommence avec une texture flottante classique si besoin. Le test ne
+    // tourne qu'à la première construction : ensuite on connaît le pilote.
+    bool asFloat = rgb9e5State < 0;
+    GLuint tex = renderSkyFaces(prog, vao, faceSize, s, uploadSource(asFloat));
+    if (rgb9e5State == 0) {
+        if (!isBlack(tex, faceSize)) {
+            rgb9e5State = 1;
+        } else {
+            std::cerr << "Fond de ciel noir avec la texture RGB9_E5, nouvel essai en RGB16F\n";
             glDeleteTextures(1, &tex);
-            glDeleteProgram(prog);
-            s.status = "Image chargée mais rendue noire par le pilote graphique : ciel procédural utilisé";
-            std::cerr << s.status << "\n";
-            return 0;
+            asFloat = true;
+            tex = renderSkyFaces(prog, vao, faceSize, s, uploadSource(true));
+            if (isBlack(tex, faceSize)) {
+                glDeleteTextures(1, &tex);
+                glDeleteProgram(prog);
+                releaseSource();
+                s.status = "Image chargée mais rendue noire par le pilote graphique : ciel procédural utilisé";
+                std::cerr << s.status << "\n";
+                return 0;
+            }
+            rgb9e5State = -1;
         }
     }
+    const char* mode = asFloat ? ", RGB16F" : "";
     glDeleteProgram(prog);
     char buf[64];
     std::snprintf(buf, sizeof(buf), " (%dx%d%s)", cache.width, cache.height, mode);
