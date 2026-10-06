@@ -47,6 +47,7 @@
 //   --star N        : affiche l'étoile n° N de la liste (0 = Soleil)
 //   --mass M        : affiche une étoile de la séquence principale de M masses solaires
 //   --quasar        : trou noir supermassif avec disque brillant et jets
+//   --binary        : système double, étoile compagne dont le gaz est arraché
 //   --bh-mass M     : masse du trou noir (masses solaires)
 //   --field N       : ajoute un champ de N astéroïdes
 //   --advance T     : fait avancer les astéroïdes de T unités de temps avant l'image
@@ -55,6 +56,7 @@
 #include <GLFW/glfw3.h>
 
 #include "app.hpp"
+#include "binary_gfx.hpp"
 #include "shader.hpp"
 #include "ui.hpp"
 #include "star.hpp"
@@ -240,6 +242,7 @@ void traceFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarg
     glBindFramebuffer(GL_FRAMEBUFFER, target.fbo);
     glViewport(0, 0, target.width, target.height);
     glUseProgram(prog.trace);
+    setCompanionUniforms(prog.trace, app);
     glUniform2f(prog.resolution, float(target.width), float(target.height));
     glUniform1f(prog.time, time);
     glUniform3f(prog.camPos, pos.x, pos.y, pos.z);
@@ -529,11 +532,15 @@ AsteroidRenderer asteroidGfx;
 void traceScene(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarget& target,
                 const App& app, double simTime)
 {
-    if (app.starMode)
+    if (app.starMode) {
         traceStarFrame(prog, vao, skyTex, target, app, simTime);
-    else
+    } else {
+        app.binary.update(simTime, app.showDisk ? app.disk.outerRadius : 0.0);
         traceFrame(prog, vao, skyTex, target, app, float(simTime));
+    }
     asteroidGfx.draw(prog, target, app);
+    if (!app.starMode)
+        drawGasStream(shaderDir, target.fbo, target.width, target.height, app);
 }
 
 // Passe 3 : agrandissement + tone mapping vers outFbo (0 = la fenêtre).
@@ -883,11 +890,12 @@ int main(int argc, char** argv)
         else if (arg == "--star" && hasValue) { setStarMode(app, true); selectPreset(app, std::atoi(argv[++i])); }
         else if (arg == "--mass" && hasValue) { setStarMode(app, true); selectMainSequence(app, std::atof(argv[++i])); }
         else if (arg == "--quasar") applyQuasar(app);
+        else if (arg == "--binary") applyBinary(app);
         else if (arg == "--bh-mass" && hasValue) app.massSolar = float(std::atof(argv[++i]));
         else if (arg == "--field" && hasValue) fieldCount = std::max(0, std::atoi(argv[++i]));
         else if (arg == "--advance" && hasValue) advance = std::atof(argv[++i]);
     }
-    if (app.starMode || app.jets) app.camera.distance = app.camera.targetDistance;
+    if (app.starMode || app.jets || app.binary.settings.enabled) app.camera.distance = app.camera.targetDistance;
     if (fieldCount > 0) {
         app.field.count = fieldCount;
         app.asteroids.addField(centralBody(app), app.field);
@@ -962,6 +970,7 @@ int main(int argc, char** argv)
     if (offscreen) {
         int code = renderOffscreen(prog, vao, skyTex, app, width, height, screenshotPath, benchFrames);
         asteroidGfx.destroy();
+        destroyBinaryGfx();
         prog.destroy();
         glfwTerminate();
         return code;
@@ -1061,6 +1070,7 @@ int main(int argc, char** argv)
 
     uiShutdown();
     asteroidGfx.destroy();
+    destroyBinaryGfx();
     target.destroy();
     glDeleteQueries(1, &autoRes.query);
     glDeleteTextures(1, &skyTex);

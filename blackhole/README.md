@@ -188,6 +188,33 @@ donne 36 ans : les naines M entièrement convectives ne suivent pas la
 relation des étoiles de type solaire), et les supergéantes chaudes comme
 Rigel ont des pulsations propres non modélisées.
 
+## Système double
+
+Une étoile compagne tourne autour du trou noir et le trou noir lui arrache
+son gaz, comme dans les binaires X (Cygnus X-1, A0620-00). Panneau :
+onglet Objet, carte « Système double » ; ligne de commande : `--binary`.
+
+![Système double](docs/binaire.jpg)
+
+*À gauche, l'étoile étirée en goutte par la marée et le jet de gaz qui part
+du point L1 vers le disque. À droite, l'étoile passe derrière le trou noir :
+sa lumière, déviée, forme un anneau d'Einstein autour de l'ombre.*
+
+| Effet | Modèle |
+|---|---|
+| Orbite | circulaire dans le plan du disque, `Ω² = G (M + m) / a³` |
+| Lobe de Roche | formule d'Eggleton `rL / a = 0,49 q^⅔ / (0,6 q^⅔ + ln(1 + q^⅓))` |
+| Forme de l'étoile | ellipsoïde de même volume dont la pointe atteint L1 quand l'étoile remplit son lobe |
+| Point L1 | équilibre des deux gravités et de la force centrifuge, cherché par dichotomie |
+| Jet de gaz | paquets lâchés en L1 avec la rotation de l'orbite, soumis au trou noir (Paczyński-Wiita), à l'étoile et au mouvement du trou noir autour du centre de masse ; ils s'arrêtent sur le bord du disque |
+| Surface | assombrissement centre-bord, assombrissement gravitationnel vers L1 (von Zeipel), face chauffée par les rayons X du disque, rotation synchrone |
+| Lumière | l'étoile est dans le ray tracer : lentille gravitationnelle, effet Doppler de l'orbite, décalage gravitationnel |
+
+Les distances sont rapprochées : dans Cygnus X-1, 0,2 UA séparent les deux
+astres alors que l'horizon fait 60 km. Les rapports de masse, la taille des
+lobes et la position de L1 sont les vrais. Le disque est borné à 80 % du
+lobe du trou noir.
+
 ## Installer les outils
 
 - **VS Code** avec les extensions recommandées (VS Code les propose à
@@ -321,6 +348,7 @@ Options :
 | `--star N` | démarre sur l'étoile n° N (0 Soleil, 1 Proxima, 2 Sirius A, 3 Rigel, 4 Bételgeuse, 5 Aldébaran, 6 Sirius B, 7 étoile à neutrons, 8 pulsar du Crabe, 9 pulsar milliseconde PSR J0437-4715, 10 magnétar SGR 1806-20) |
 | `--mass M` | démarre sur une étoile de la séquence principale de M masses solaires |
 | `--quasar` | trou noir supermassif, disque très chaud et jets relativistes |
+| `--binary` | système double : étoile compagne dont le gaz est arraché |
 | `--bh-mass M` | masse du trou noir en masses solaires (change la limite de Roche des astéroïdes) |
 | `--field N` | ajoute un champ de N astéroïdes |
 | `--advance T` | fait avancer les astéroïdes de T unités de temps avant l'image (rs/c, ou secondes pour une étoile) |
