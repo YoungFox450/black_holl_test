@@ -49,7 +49,9 @@ finit, le pixel prend la couleur :
 - **Panneau de contrôle** (Dear ImGui, police Inter, `F1` ou `Tab`) : lecture
   et vitesse du temps toujours visibles, onglets Objet (trou noir, disque,
   étoiles), Vue, Rendu et Touches (toutes les touches, avec recherche), ligne d'état avec les FPS, bulle d'aide sur
-  chaque réglage.
+  chaque réglage. Chaque touche affiche un bref message en bas de l'écran.
+  Réglages de vitesse d'orbite, sensibilité de la souris, luminosité du fond,
+  taille des astéroïdes, vitesse et largeur des jets, marées et fonte.
 
 ![Panneau de contrôle](blackhole/docs/panneau.jpg)
 
@@ -187,6 +189,8 @@ Les détails et les mesures sont dans
         ├── ui_activity.cpp   cartes « Activité de l'étoile »
         ├── ui_compact.cpp    cartes pulsar, magnétar et quasar
         ├── ui_asteroids.cpp  cartes des astéroïdes
+        ├── ui_keys.cpp       onglet Touches et messages des touches
+        ├── ui_simulation.cpp carte Simulation (lentille, pause, pas à pas)
         ├── star.cpp/.hpp     modèles physiques des étoiles et étoiles à neutrons
         ├── activity.cpp/.hpp activité magnétique : taches, cycle, éruptions
         ├── asteroids.cpp/.hpp  orbites, capture, marées, fonte des astéroïdes
@@ -209,6 +213,7 @@ La physique (équation des photons, horizon, disque, Doppler, modèle des
 | 7. Couleurs | Couleurs de corps noir converties en lumière linéaire : étoiles froides et disque bien orangés |
 | 8. Nouveau panneau | Thème moderne avec onglets et cartes, police Inter, étoiles 2,5 fois plus rapides |
 | 9. Activité et objets compacts | Activité des étoiles par lois physiques ; pulsars, magnétars, quasar et astéroïdes |
+| 10. Touches et réglages | Onglet Touches, lentille désactivable (`V`, 60 % d'images en plus sans lentille), pas à pas (`T`), nouveaux réglages |
 
 ## Pistes pour la suite
 
