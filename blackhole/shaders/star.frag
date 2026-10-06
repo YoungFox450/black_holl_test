@@ -115,7 +115,24 @@ void main()
     bool hit = false;
     float rMin = length(pos);
 
-    for (int i = 0; i < uMaxSteps; ++i) {
+    // Etoile peu compacte (tout sauf les etoiles a neutrons) : la lumiere
+    // est deviee de moins de 0,1 degre, invisible a l'ecran. On remplace
+    // l'integration pas a pas par l'intersection exacte droite / sphere.
+    bool straight = uCompact < 1.0e-3;
+    if (straight) {
+        float b = dot(pos, dir);
+        float cc = dot(pos, pos) - 1.0;
+        float disc = b * b - cc;
+        rMin = b < 0.0 ? sqrt(max(cc + 1.0 - b * b, 0.0)) : length(pos);
+        float t = -b - sqrt(max(disc, 0.0));
+        if (disc > 0.0 && t > 0.0) {
+            vec3 p = normalize(pos + t * dir);
+            color = surface(p, clamp(dot(p, -dir), 0.0, 1.0));
+            hit = true;
+        }
+    }
+
+    for (int i = 0; i < (straight ? 0 : uMaxSteps); ++i) {
         float r = length(pos);
         float radial = dot(pos, vel);
         if (r > ESCAPE_R && radial > 0.0) break;
