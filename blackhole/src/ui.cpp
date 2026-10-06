@@ -200,9 +200,9 @@ void tuneStarCard(App& app)
                          "1 = 696 000 km. Étoile à neutrons : ~0,00002 ; "
                          "Bételgeuse : ~760.", true);
     edited |= ui::slider("Température", &star.temperature, 2000.0, 1.0e6, "%.0f K", nullptr, true);
-    edited |= ui::slider("Rotation", &star.rotationDays, 1e-5, 40000.0, "%.3g jours", nullptr, true);
-    edited |= ui::slider("Activité", &star.activity, 0.0, 1.0, "%.2f",
-                         "Taches et éruptions : 0 = étoile calme, 1 = très active.");
+    edited |= ui::slider("Rotation", &star.rotationDays, 1e-5, 40000.0, "%.3g jours",
+                         "Période à l'équateur. Pour une étoile froide, elle fixe "
+                         "l'activité magnétique (carte Activité).", true);
     if (edited && app.starIndex >= 0) {
         app.starIndex = -1;
         star.name = "Sur mesure";

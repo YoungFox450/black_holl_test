@@ -23,6 +23,8 @@ blackhole/
 │   └── present.frag       agrandit l'image + tone mapping
 └── src/
     ├── main.cpp           fenêtre, caméra orbitale, boucle de rendu
+    ├── activity.cpp/.hpp  activité des étoiles (taches, cycle, éruptions)
+    ├── ui_activity.cpp    cartes « activité » du panneau
     └── shader.cpp/.hpp    compilation des shaders
 ```
 
@@ -131,7 +133,7 @@ neutrons, naine rouge de 0,3 M☉ (calculée à partir de sa seule masse).*
 | Couleur | corps noir à la température effective |
 | Bord plus sombre | assombrissement centre-bord `I(μ) = 1 − u (1 − μ)`, u plus fort pour les étoiles froides |
 | Granulation | cellules de convection, taille ∝ échelle de hauteur `T / g` : quelques cellules géantes sur Bételgeuse, d'innombrables sur une naine |
-| Taches | sur les étoiles froides et actives, plus froides que la surface |
+| Taches, éruptions, cycle | voir « Activité des étoiles » ci-dessous |
 | Relativité | rayons courbés par la gravité avec `rs / R = 2GM / (c² R)` : invisible pour le Soleil, très net pour l'étoile à neutrons (on voit une partie de son arrière), plus le décalage gravitationnel vers le rouge |
 
 Les distances de la caméra sont en rayons de l'étoile : toutes les étoiles
@@ -141,6 +143,50 @@ masse, rayon, température, luminosité et type spectral.
 Pour ajouter une étoile, il suffit d'ajouter une ligne dans
 `starPresets()` (`src/star.cpp`), ou d'utiliser `mainSequenceStar(masse)` /
 `whiteDwarf(masse, température)`.
+
+## Activité des étoiles
+
+L'activité magnétique (taches, facules, cycle, éruptions) et les
+oscillations sont calculées dans `src/activity.cpp` à partir de la masse,
+du rayon, de la température et de la **rotation** de l'étoile, par des lois
+empiriques publiées. Il n'y a plus de réglage « activité » : elle découle
+de la rotation, comme pour les vraies étoiles.
+
+![Activité](docs/activite.jpg)
+
+*Le Soleil près du maximum de son cycle (taches aux latitudes moyennes) et
+Proxima du Centaure pendant une éruption.*
+
+| Effet | Modèle |
+|---|---|
+| Dynamo | seulement si l'enveloppe est convective (T < ~6 700 K, cassure de Kraft). Sirius A et Rigel n'ont ni taches ni éruptions |
+| Rotation → activité | nombre de Rossby `Ro = P_rot / τ_c`, avec `log τ_c = 2,33 − 1,50 M + 0,31 M²` (Wright 2018), ~150 j pour les géantes ; `L_X / L_bol = 10^-3,13 (Ro / 0,13)^-2,7`, plafonné sous Ro = 0,13 (Wright 2011) |
+| Rotation des étoiles créées | gyrochronologie à 4,6 milliards d'années, `P = 0,7725 (B−V − 0,4)^0,601 t^0,519` (Barnes 2007) : 27 j pour 1 M☉, ~95 j pour une naine M |
+| Surface tachée | `f = 0,4 (L_X / L_X,sat)^0,84`, calé entre le Soleil (~0,1 %) et les naines M saturées (~40 %) |
+| Taches | ombre et pénombre, `ΔT ≈ 0,6 T − 1780 K` (Berdyugina 2005), brillance `(T_tache / T)⁴` ; durée de vie de Gnevyshev-Waldmeier (~30 j) |
+| Facules | aire `0,55 √f`, contraste nul au centre et ~15 % au bord |
+| Cycle | période `≈ 158 P_rot` (11 ans pour le Soleil, Böhm-Vitense 2007), forme de Hathaway (1994) ; absent pour les étoiles saturées |
+| Diagramme papillon | loi de Spörer `λ = 28° exp(−t / 90 mois)` (Hathaway 2011), le cycle suivant commence à haute latitude pendant que le précédent finit à l'équateur ; taches vers les pôles pour les rotateurs rapides |
+| Rotation différentielle | `Ω(λ) = Ω_eq (1 − α sin² λ)`, `ΔΩ = 0,073 rad/j (T / 5772 K)^8,6` (Collier Cameron 2007) |
+| Éruptions | processus de Poisson, fréquence ∝ L_X (calée sur GJ 1243), énergies `dN/dE ∝ E^-2`, profil de Davenport (2014), plasma à 9 000 K : `L_pic = E / (1,827 t½)`, `t½ ∝ E^0,39` |
+| Oscillations | `ν_max = 3090 µHz (g/g☉)(T/T☉)^-½`, `Δν = 135 µHz √ρ`, `δL/L = 4,7 ppm (L/M)^0,8` (Kjeldsen & Bedding 1995) : ~100 jours et 0,5 % pour Bételgeuse |
+
+| Étoile | Ro | Surface tachée | Cycle | Éruptions / jour |
+|---|---|---|---|---|
+| Soleil | 1,8 | 0,1 % | 11 ans | 0,01 |
+| Proxima du Centaure | 0,6 | 1,3 % | 36 ans | 0,2 |
+| Aldébaran | 3,5 | 0,02 % | 225 ans | 0,002 |
+| Bételgeuse | 240 | ~0 | — | ~0 |
+| Sirius A, Rigel | — | aucune (enveloppe radiative) | — | — |
+
+Échelle de temps : 1 seconde affichée = 2 jours (vitesse x10). Les
+éruptions, qui durent quelques minutes, sont montrées au ralenti ; seules
+les plus grosses sont affichées quand l'étoile en produit beaucoup.
+
+Limites connues : le cycle de Proxima mesuré est de ~7 ans (le modèle
+donne 36 ans : les naines M entièrement convectives ne suivent pas la
+relation des étoiles de type solaire), et les supergéantes chaudes comme
+Rigel ont des pulsations propres non modélisées.
 
 ## Installer les outils
 
@@ -196,7 +242,10 @@ De haut en bas :
   - étoile : étoile connue (Soleil, Proxima du Centaure, Sirius A et B,
     Rigel, Bételgeuse, Aldébaran, étoile à neutrons), création d'une étoile
     comme le Soleil ou d'une naine blanche à partir de sa masse, réglages
-    fins, et ce que la physique en déduit (luminosité, gravité, compacité).
+    fins, et ce que la physique en déduit (luminosité, gravité, compacité) ;
+  - activité de l'étoile (`src/ui_activity.cpp`) : nombre de Rossby,
+    rayons X, rotation différentielle, phase du cycle (réglable), surface
+    tachée, latitude des taches, éruptions en cours, oscillations.
 - **Onglet Vue** : distance, angles, champ de vision, orbite automatique.
 - **Onglet Rendu** : résolution (auto ou fixe), FPS visé, pas max par rayon,
   mesures, exposition, rechargement des shaders.

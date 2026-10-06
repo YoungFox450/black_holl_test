@@ -244,10 +244,37 @@ void traceFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarg
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
+// Vitesse de rotation affichée (rad/jour), bornée pour les objets qui
+// tournent très vite (sinon la rotation crénelle à l'écran).
+double displayOmega(const Star& star)
+{
+    return std::min(6.283185307 / std::max(star.rotationDays, 1e-9), 1.5);
+}
+
+// Position (repère fixe) d'un point de latitude/longitude données à la
+// surface de l'étoile, entraîné par la rotation différentielle.
+Vec3 surfacePoint(double lat, double lon, double angle)
+{
+    double a = lon + angle;
+    double c = std::cos(lat);
+    // Même convention que rotateY() dans star.frag.
+    return {float(c * std::cos(a)), float(std::sin(lat)), float(-c * std::sin(a))};
+}
+
+// Avance la simulation des éruptions de l'étoile jusqu'au temps simTime.
+void updateStarActivity(App& app, double simTime)
+{
+    StellarActivity act = computeActivity(app.star);
+    double days = simTime / 10.0 * kStarDaysPerSecond;
+    CycleState cyc = cycleState(act, cyclePhase(app, act));
+    app.flares.update(app.star, act, cyc, days);
+}
+
 // Passe 2 bis : ray tracing d'une étoile (shaders/star.frag). Les paramètres
-// du shader viennent du modèle physique de l'étoile (src/star.cpp).
+// du shader viennent du modèle physique de l'étoile (src/star.cpp) et de
+// son activité magnétique (src/activity.cpp).
 void traceStarFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarget& target,
-                    const App& app, float seconds)
+                    const App& app, double simTime)
 {
     const OrbitCamera& cam = app.camera;
     const Star& star = app.star;
@@ -258,15 +285,23 @@ void traceStarFrame(const Programs& prog, GLuint vao, GLuint skyTex, const Trace
     GLuint p = prog.star;
     auto loc = [p](const char* name) { return glGetUniformLocation(p, name); };
 
-    // Rotation affichée : un tour toutes les "rotationDays * 2" secondes
-    // (Soleil : ~50 s), bornée pour les objets qui tournent très vite.
-    float rotSpeed = std::min(float(6.2831853 / (star.rotationDays * 2.0)), 3.0f);
+    const double seconds = simTime / 10.0;
+    const double days = seconds * kStarDaysPerSecond;
+    const StellarActivity act = computeActivity(star);
+    const CycleState cyc = cycleState(act, cyclePhase(app, act));
+    const double kTwoPi = 6.283185307179586;
+
+    // Rotation : angle de l'équateur et cisaillement (rotation différentielle),
+    // avec le même facteur de ralenti que la rotation.
+    double omega = displayOmega(star);
+    double rotation = std::fmod(omega * days, kTwoPi);
+    double shear = act.shearRatio * omega; // rad/jour
 
     glBindFramebuffer(GL_FRAMEBUFFER, target.fbo);
     glViewport(0, 0, target.width, target.height);
     glUseProgram(p);
     glUniform2f(loc("uResolution"), float(target.width), float(target.height));
-    glUniform1f(loc("uTime"), seconds);
+    glUniform1f(loc("uTime"), float(seconds));
     glUniform3f(loc("uCamPos"), pos.x, pos.y, pos.z);
     glUniform3f(loc("uCamRight"), right.x, right.y, right.z);
     glUniform3f(loc("uCamUp"), up.x, up.y, up.z);
@@ -277,8 +312,70 @@ void traceStarFrame(const Programs& prog, GLuint vao, GLuint skyTex, const Trace
     glUniform1f(loc("uCompact"), float(star.compactness()));
     glUniform1f(loc("uLimb"), float(star.limbDarkening()));
     glUniform1f(loc("uGranScale"), float(star.granulationScale()));
-    glUniform1f(loc("uActivity"), float(star.activity));
-    glUniform1f(loc("uRotSpeed"), rotSpeed);
+    glUniform1f(loc("uRotation"), float(rotation));
+    glUniform1f(loc("uPulse"), float(oscillation(act, days)));
+
+    // Taches : amplitude de chaque bande telle que la fraction de surface
+    // tachée vaille f × niveau du cycle × part de la bande.
+    const double deg = kTwoPi / 360.0;
+    double sigma = 7.0 * (1.0 + 2.0 * act.polewardShift) * deg;
+    float band[4] = {0, 0, 0, 0};
+    for (int k = 0; k < 2; ++k) {
+        double lat0 = cyc.bandLatDeg[k] * deg;
+        double integral = 0.0; // ∫₀^π/2 G(λ) cos λ dλ (les deux hémisphères)
+        const int n = 200;
+        for (int i = 0; i < n; ++i) {
+            double lat = (i + 0.5) / n * kTwoPi / 4.0;
+            double x = (lat - lat0) / sigma;
+            integral += std::exp(-0.5 * x * x) * std::cos(lat) * (kTwoPi / 4.0) / n;
+        }
+        band[2 * k] = float(lat0);
+        band[2 * k + 1] = float(act.spotCoverage * cyc.level * cyc.bandWeight[k] / integral);
+    }
+    glUniform1i(loc("uSpotsOn"), act.active() ? 1 : 0);
+    glUniform4f(loc("uBand"), band[0], band[1], band[2], band[3]);
+    glUniform1f(loc("uBandWidth"), float(sigma));
+    glUniform1f(loc("uFaculaRatio"), float(act.active() ? act.faculaCoverage / act.spotCoverage : 0.0));
+    glUniform1f(loc("uUmbraRatio"), float(act.active() ? act.umbraTemp / star.temperature : 1.0));
+    glUniform1f(loc("uPenumbraRatio"), float(act.active() ? act.penumbraTemp / star.temperature : 1.0));
+
+    // Deux générations de taches décalées d'une demi-vie : poids sin² et cos²
+    // (somme 1), chacune cisaillée depuis sa naissance seulement.
+    float layers[6] = {0, 0, 0, 0, 0, 0};
+    if (act.active()) {
+        double life = act.spotLifetimeDays;
+        for (int k = 0; k < 2; ++k) {
+            double u = days / life + 0.5 * k;
+            double gen = std::floor(u);
+            double age = u - gen;
+            double w = std::sin(age * kTwoPi / 2.0);
+            layers[3 * k + 0] = float(w * w);
+            layers[3 * k + 1] = float(shear * age * life);
+            layers[3 * k + 2] = float(std::fmod(2.0 * gen + k, 64.0));
+        }
+    }
+    glUniform3fv(loc("uSpotLayer"), 2, layers);
+
+    // Éruptions en cours.
+    float flarePos[4 * FlareSimulator::kMax] = {};
+    float flareAmp[FlareSimulator::kMax] = {};
+    int nFlares = 0;
+    for (int i = 0; i < app.flares.count(); ++i) {
+        const Flare& f = app.flares.flares()[i];
+        double s2 = std::sin(f.latitude) * std::sin(f.latitude);
+        double angle = std::fmod((omega - shear * s2) * days, kTwoPi);
+        Vec3 d = surfacePoint(f.latitude, f.longitude, angle);
+        flarePos[4 * nFlares + 0] = d.x;
+        flarePos[4 * nFlares + 1] = d.y;
+        flarePos[4 * nFlares + 2] = d.z;
+        flarePos[4 * nFlares + 3] = float(std::max(2.0 * f.areaFraction, 1e-5));
+        flareAmp[nFlares] = float(app.flares.profile(f, days));
+        ++nFlares;
+    }
+    glUniform1i(loc("uFlareCount"), nFlares);
+    glUniform4fv(loc("uFlarePos"), FlareSimulator::kMax, flarePos);
+    glUniform1fv(loc("uFlareAmp"), FlareSimulator::kMax, flareAmp);
+
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, skyTex);
     glUniform1i(loc("uSky"), 0);
@@ -291,7 +388,7 @@ void traceScene(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarg
                 const App& app, double simTime)
 {
     if (app.starMode)
-        traceStarFrame(prog, vao, skyTex, target, app, float(simTime / 10.0));
+        traceStarFrame(prog, vao, skyTex, target, app, simTime);
     else
         traceFrame(prog, vao, skyTex, target, app, float(simTime));
 }
@@ -458,7 +555,7 @@ bool writePPM(const std::string& path, int w, int h)
 
 // Rendu hors écran : une image enregistrée en PPM (--screenshot), ou N images
 // chronométrées (--bench).
-int renderOffscreen(const Programs& prog, GLuint vao, GLuint skyTex, const App& app, int w, int h,
+int renderOffscreen(const Programs& prog, GLuint vao, GLuint skyTex, App& app, int w, int h,
                     const std::string& path, int benchFrames)
 {
     GLuint tex = 0, fbo = 0;
@@ -481,6 +578,11 @@ int renderOffscreen(const Programs& prog, GLuint vao, GLuint skyTex, const App& 
     int frames = std::max(1, benchFrames);
     // Une image de chauffe (compilation paresseuse des shaders par le pilote).
     const double t0 = app.simTime;
+    if (app.starMode) {
+        // Simule les éruptions des 20 dernières secondes pour l'image.
+        for (int i = 200; i >= 0; --i)
+            updateStarActivity(app, t0 - i * 1.0);
+    }
     traceScene(prog, vao, skyTex, target, app, t0);
     glFinish();
     auto start = std::chrono::steady_clock::now();
@@ -688,6 +790,8 @@ int main(int argc, char** argv)
         app.camera.update(dt, app.dragging);
         if (!app.paused)
             app.simTime += double(dt) * app.simSpeed;
+        if (app.starMode)
+            updateStarActivity(app, app.simTime);
 
         int fbW, fbH;
         glfwGetFramebufferSize(window, &fbW, &fbH);

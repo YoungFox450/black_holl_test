@@ -6,8 +6,8 @@
 //
 //     static void drawActivity(App& app)
 //     {
-//         ui::slider("Activité", &app.star.activity, 0.0, 1.0, "%.2f",
-//                    "Taches et éruptions : 0 = calme, 1 = très active.");
+//         ui::slider("Rotation", &app.star.rotationDays, 0.1, 100.0, "%.3g j",
+//                    "Période de rotation à l'équateur.");
 //         ui::toggle("Éruptions", &app.flares, "Affiche les éruptions.");
 //         ui::value("Taches visibles", "%d", spotCount);
 //     }

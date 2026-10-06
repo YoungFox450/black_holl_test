@@ -12,6 +12,21 @@ constexpr double kSunRadiusKm = 695700.0;
 constexpr double kChandrasekhar = 1.44;             // M☉
 constexpr double kNeutronStarRadius = 12.0 / kSunRadiusKm;
 
+// Indice de couleur B-V d'un corps noir de température T : on inverse la
+// formule de Ballesteros (2012), T = 4600 (1/(0,92 BV + 1,7) + 1/(0,92 BV + 0,62)),
+// qui décroît avec BV (dichotomie).
+double colorIndexBV(double t)
+{
+    auto temp = [](double bv) { return 4600.0 * (1.0 / (0.92 * bv + 1.7) + 1.0 / (0.92 * bv + 0.62)); };
+    double lo = -0.4, hi = 2.5;
+    for (int i = 0; i < 50; ++i) {
+        double mid = 0.5 * (lo + hi);
+        if (temp(mid) > t) lo = mid;
+        else hi = mid;
+    }
+    return 0.5 * (lo + hi);
+}
+
 } // namespace
 
 double Star::luminosity() const
@@ -93,10 +108,16 @@ Star mainSequenceStar(double mass)
     // Température déduite de Stefan-Boltzmann : L = R² T⁴.
     s.temperature = kSunTemperature * std::pow(L / (s.radius * s.radius), 0.25);
 
-    // Les petites étoiles convectives tournent vite et sont actives,
-    // les étoiles chaudes (sans enveloppe convective) n'ont pas de taches.
-    s.activity = std::clamp((6500.0 - s.temperature) / 3500.0, 0.0, 1.0);
-    s.rotationDays = mass < 1.0 ? 25.0 * mass : 25.0 / (mass * mass);
+    // Rotation à l'âge du Soleil (4,6 milliards d'années). Les étoiles à
+    // enveloppe convective sont freinées par leur vent magnétique :
+    // gyrochronologie de Barnes (2007), P = 0,7725 (B-V - 0,4)^0,601 t^0,519
+    // (t en millions d'années), avec l'indice de couleur B-V tiré de T
+    // (Ballesteros 2012). Les étoiles chaudes, sans ce freinage, restent rapides.
+    double bv = colorIndexBV(s.temperature);
+    if (bv > 0.47)
+        s.rotationDays = 0.7725 * std::pow(bv - 0.4, 0.601) * std::pow(4600.0, 0.5189);
+    else
+        s.rotationDays = std::min(12.5, 25.0 / (mass * mass));
 
     if (s.temperature < 3700)      s.kind = "naine rouge";
     else if (s.temperature < 5200) s.kind = "naine orange";
@@ -119,7 +140,6 @@ Star whiteDwarf(double mass, double temperature)
     double x = mass / kChandrasekhar;
     s.radius = 0.0126 * std::pow(x, -1.0 / 3.0) * std::sqrt(1.0 - std::pow(x, 4.0 / 3.0));
     s.rotationDays = 0.1;
-    s.activity = 0.0;
     return s;
 }
 
@@ -127,17 +147,17 @@ const std::vector<Star>& starPresets()
 {
     static const std::vector<Star> presets = [] {
         std::vector<Star> v;
-        //          nom                     type                       M      R        T      rot.   activité
-        v.push_back({"Soleil",              "naine jaune",             1.0,   1.0,     5772,  25.4,  0.35});
-        v.push_back({"Proxima du Centaure", "naine rouge",             0.122, 0.154,   3042,  83.0,  0.9});
-        v.push_back({"Sirius A",            "étoile blanche",          2.06,  1.71,    9940,  5.5,   0.0});
-        v.push_back({"Rigel",               "supergéante bleue",       21.0,  78.9,    12100, 25.0,  0.0});
-        v.push_back({"Bételgeuse",          "supergéante rouge",       16.5,  764.0,   3600,  36000, 0.2});
-        v.push_back({"Aldébaran",           "géante orange",           1.16,  44.2,    3900,  520,   0.1});
+        //          nom                     type                       M      R        T      rot. (j)
+        v.push_back({"Soleil",              "naine jaune",             1.0,   1.0,     5772,  25.4});
+        v.push_back({"Proxima du Centaure", "naine rouge",             0.122, 0.154,   3042,  83.0});
+        v.push_back({"Sirius A",            "étoile blanche",          2.06,  1.71,    9940,  5.5});
+        v.push_back({"Rigel",               "supergéante bleue",       21.0,  78.9,    12100, 25.0});
+        v.push_back({"Bételgeuse",          "supergéante rouge",       16.5,  764.0,   3600,  36000});
+        v.push_back({"Aldébaran",           "géante orange",           1.16,  44.2,    3900,  520});
         Star wd = whiteDwarf(1.02, 25000);
         wd.name = "Sirius B";
         v.push_back(wd);
-        v.push_back({"Étoile à neutrons",   "étoile à neutrons",       1.4,   kNeutronStarRadius, 1.0e6, 1e-5, 0.0});
+        v.push_back({"Étoile à neutrons",   "étoile à neutrons",       1.4,   kNeutronStarRadius, 1.0e6, 1e-5});
         return v;
     }();
     return presets;

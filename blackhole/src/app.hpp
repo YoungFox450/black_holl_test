@@ -3,6 +3,7 @@
 // État de l'application partagé entre la boucle principale (main.cpp) et le
 // panneau de contrôle (ui.cpp).
 
+#include "activity.hpp"
 #include "star.hpp"
 
 #include <algorithm>
@@ -112,7 +113,25 @@ struct App {
     bool starMode = false;
     int starIndex = 0;          // dans starPresets(), -1 = séquence principale
     Star star = starPresets()[0];
+    // Activité de l'étoile (src/activity.cpp) : éruptions en cours et
+    // décalage de phase du cycle magnétique (réglable dans le panneau).
+    FlareSimulator flares;
+    double cyclePhaseOffset = 0.4;  // 0,4 : près du maximum du cycle
 };
+
+// Temps de l'étoile en jours (1 s affichée = kStarDaysPerSecond jours).
+inline double starDays(const App& app)
+{
+    return app.simTime / 10.0 * kStarDaysPerSecond;
+}
+
+// Phase (0..1) du cycle magnétique de l'étoile.
+inline double cyclePhase(const App& app, const StellarActivity& act)
+{
+    if (act.cycleYears <= 0.0) return app.cyclePhaseOffset;
+    double p = starDays(app) / (act.cycleYears * 365.25) + app.cyclePhaseOffset;
+    return p - std::floor(p);
+}
 
 // Distance de caméra par défaut : en rayons de Schwarzschild pour le trou
 // noir, en rayons de l'étoile pour une étoile.
@@ -142,6 +161,7 @@ inline void selectPreset(App& app, int index)
     int n = int(presets.size());
     app.starIndex = ((index % n) + n) % n;
     app.star = presets[app.starIndex];
+    app.flares.clear();
     std::cout << app.star.summary() << "\n";
 }
 
@@ -149,5 +169,6 @@ inline void selectMainSequence(App& app, double mass)
 {
     app.starIndex = -1;
     app.star = mainSequenceStar(mass);
+    app.flares.clear();
     std::cout << app.star.summary() << "\n";
 }
