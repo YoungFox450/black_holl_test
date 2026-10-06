@@ -281,6 +281,10 @@ Les lettres marchent en AZERTY comme en QWERTY.
 | `E` | passer du trou noir à une étoile, et retour |
 | `N` / `B` | étoile suivante / précédente de la liste |
 | `I` / `U` | étoile de la séquence principale plus / moins massive (×1,25) |
+| `J` | jets relativistes du trou noir (quasar) |
+| `F` | ajouter un champ d'astéroïdes (réglages du panneau) |
+| `G` | ajouter un astéroïde en orbite circulaire |
+| `X` | retirer tous les astéroïdes |
 | `F1` ou `Tab` | afficher / cacher le panneau de contrôle |
 | `Échap` | quitter |
 
@@ -295,8 +299,12 @@ Options :
 | `--scale S` | résolution fixe, fraction de la fenêtre (0.25 à 1) |
 | `--sky N` | taille d'une face du ciel (1024 ; 512 si la mémoire manque) |
 | `--bench N` | rend N images hors écran et affiche le temps moyen |
-| `--star N` | démarre sur l'étoile n° N (0 Soleil, 1 Proxima, 2 Sirius A, 3 Rigel, 4 Bételgeuse, 5 Aldébaran, 6 Sirius B, 7 étoile à neutrons) |
+| `--star N` | démarre sur l'étoile n° N (0 Soleil, 1 Proxima, 2 Sirius A, 3 Rigel, 4 Bételgeuse, 5 Aldébaran, 6 Sirius B, 7 étoile à neutrons, 8 pulsar du Crabe, 9 pulsar milliseconde PSR J0437-4715, 10 magnétar SGR 1806-20) |
 | `--mass M` | démarre sur une étoile de la séquence principale de M masses solaires |
+| `--quasar` | trou noir supermassif, disque très chaud et jets relativistes |
+| `--bh-mass M` | masse du trou noir en masses solaires (change la limite de Roche des astéroïdes) |
+| `--field N` | ajoute un champ de N astéroïdes |
+| `--advance T` | fait avancer les astéroïdes de T unités de temps avant l'image (rs/c, ou secondes pour une étoile) |
 
 Image fixe sans fenêtre (pleine résolution) :
 `blackhole --screenshot rendu.ppm --width 1920 --height 1080 [--no-disk] [--time T] [--yaw A] [--pitch A] [--distance D]`

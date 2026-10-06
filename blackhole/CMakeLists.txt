@@ -61,6 +61,9 @@ add_executable(blackhole
     src/star.cpp
     src/activity.cpp
     src/ui_activity.cpp
+    src/asteroids.cpp
+    src/ui_compact.cpp
+    src/ui_asteroids.cpp
 )
 target_link_libraries(blackhole PRIVATE glfw glad imgui)
 

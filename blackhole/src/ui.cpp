@@ -334,6 +334,8 @@ void helpTab()
         shortcutRow({"N", "B"}, "étoile suivante / préc.");
         shortcutRow({"I", "U"}, "étoile plus / moins lourde");
         shortcutRow({"H"}, "disque d'accrétion");
+        shortcutRow({"J"}, "jets du quasar");
+        shortcutRow({"F", "G", "X"}, "champ / astéroïde / retirer");
         shortcutRow({"K", "L", "O"}, "résolution");
         shortcutRow({"R"}, "recharger les shaders");
         shortcutRow({"Échap"}, "quitter");
