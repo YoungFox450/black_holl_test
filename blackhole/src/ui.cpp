@@ -1,15 +1,24 @@
 // Panneau de contrôle de la simulation, dessiné avec Dear ImGui par-dessus
-// l'image du trou noir. F1 (ou Tab) l'affiche ou le cache.
+// l'image. F1 (ou Tab) l'affiche ou le cache.
+//
+// Mise en page : en-tête, lecture / vitesse du temps, choix de la scène,
+// onglets (Objet, Vue, Rendu, Aide), puis les sections de l'onglet dans des
+// cartes, et une ligne d'état en bas. Les sections sont enregistrées avec
+// UI_SECTION (voir ui_kit.hpp) : d'autres fichiers peuvent en ajouter.
 
 #include "ui.hpp"
+#include "ui_kit.hpp"
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -21,6 +30,9 @@ constexpr float kRad2Deg = 180.0f / kPi;
 // de multiplier par M.
 constexpr double kSunRsKm = 2.9532;
 constexpr double kSunRsOverCSeconds = 9.8510e-6;
+
+UiStats gStats;   // mesures de l'image en cours, pour les sections
+int gTab = 0;     // onglet affiché : 0 Objet, 1 Vue, 2 Rendu, 3 Aide
 
 // "3,2 ms", "4,1 h", "12 ans"...
 void formatDuration(double seconds, char* out, size_t size)
@@ -46,375 +58,533 @@ void formatLength(double km, char* out, size_t size)
     else std::snprintf(out, size, "%.3g m", km * 1000.0);
 }
 
-// Petit "(?)" qui affiche une explication au survol.
-void help(const char* text)
+bool isBlackHole(const App& app) { return !app.starMode; }
+bool isStar(const App& app) { return app.starMode; }
+
+// --- Scènes du sélecteur ------------------------------------------------------
+
+UI_SCENE("Trou noir", isBlackHole, [](App& app) { setStarMode(app, false); });
+UI_SCENE("Étoile", isStar, [](App& app) { setStarMode(app, true); });
+
+// --- Onglet Objet : trou noir ---------------------------------------------------
+
+void blackHoleCard(App& app)
 {
-    ImGui::SameLine();
-    ImGui::TextDisabled("(?)");
-    if (ImGui::BeginItemTooltip()) {
-        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.0f);
-        ImGui::TextUnformatted(text);
-        ImGui::PopTextWrapPos();
-        ImGui::EndTooltip();
-    }
-}
-
-void simulationSection(App& app)
-{
-    if (!ImGui::CollapsingHeader("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) return;
-
-    ImGui::Checkbox("Pause (P)", &app.paused);
-    ImGui::SliderFloat("Vitesse du temps", &app.simSpeed, 0.25f, 200.0f, "x%.2f",
-                       ImGuiSliderFlags_Logarithmic);
-    help("Trou noir : unités de temps rs/c simulées par seconde à l'écran. "
-         "Étoile : x10 = 2 jours par seconde. Touches + et - pour accélérer "
-         "ou ralentir.");
-
-    char real[32];
-    if (app.starMode) {
-        formatDuration(starDays(app) * 86400.0, real, sizeof(real));
-        ImGui::Text("Temps écoulé : %.0f s  (%s pour l'étoile)", app.simTime / 10.0, real);
-    } else {
-        formatDuration(app.simTime * kSunRsOverCSeconds * app.massSolar, real, sizeof(real));
-        ImGui::Text("Temps écoulé : %.0f rs/c  (%s pour ce trou noir)", app.simTime, real);
-    }
-    if (ImGui::Button("Revenir à t = 0"))
-        app.simTime = 0.0;
-}
-
-void blackHoleSection(App& app)
-{
-    if (!ImGui::CollapsingHeader("Trou noir", ImGuiTreeNodeFlags_DefaultOpen)) return;
-
-    ImGui::SliderFloat("Masse", &app.massSolar, 1.0f, 1.0e10f, "%.3g x Soleil",
-                       ImGuiSliderFlags_Logarithmic);
-    help("Toute la simulation est calculée en rayons de Schwarzschild (rs) : "
-         "l'image est la même pour toutes les masses. La masse fixe l'échelle "
-         "réelle : 10 soleils = trou noir stellaire, 4 millions = Sagittarius A*, "
-         "6,5 milliards = M87*.");
+    ui::slider("Masse", &app.massSolar, 1.0f, 1.0e10f, "%.3g × Soleil",
+               "L'image est la même pour toutes les masses : tout est calculé en "
+               "rayons de Schwarzschild (rs). La masse fixe seulement l'échelle "
+               "réelle. 10 soleils : trou noir stellaire. 4 millions : "
+               "Sagittarius A*. 6,5 milliards : M87*.", true);
 
     const double rsKm = kSunRsKm * app.massSolar;
     const double unitS = kSunRsOverCSeconds * app.massSolar;
     // Période orbitale à l'ISCO (r = 3 rs) : 2π / Ω avec Ω = sqrt(M / r³), M = 0,5.
     const double iscoPeriod = 2.0 * kPi / std::sqrt(0.5 / 27.0);
 
-    char a[32], b[32], c[32], d[32];
-    formatLength(rsKm, a, sizeof(a));
-    formatLength(rsKm * 1.5, b, sizeof(b));
-    formatLength(rsKm * 3.0, c, sizeof(c));
-    formatDuration(iscoPeriod * unitS, d, sizeof(d));
-    ImGui::Text("Horizon (rs = 2GM/c²) : %s", a);
-    ImGui::Text("Sphère de photons (1,5 rs) : %s", b);
-    ImGui::Text("Dernière orbite stable (3 rs) : %s", c);
-    ImGui::Text("Un tour à 3 rs : %s", d);
+    char buf[32];
+    ui::subheading("Tailles réelles");
+    formatLength(rsKm, buf, sizeof(buf));
+    ui::value("Horizon", "%s", buf);
+    formatLength(rsKm * 1.5, buf, sizeof(buf));
+    ui::value("Sphère de photons", "%s", buf);
+    formatLength(rsKm * 3.0, buf, sizeof(buf));
+    ui::value("Dernière orbite stable", "%s", buf);
+    formatDuration(iscoPeriod * unitS, buf, sizeof(buf));
+    ui::value("Un tour sur cette orbite", "%s", buf);
 }
+UI_SECTION(ui::Tab::Object, 10, "Trou noir", blackHoleCard, isBlackHole);
 
-void diskSection(App& app)
+void diskCard(App& app)
 {
-    if (!ImGui::CollapsingHeader("Disque d'accrétion", ImGuiTreeNodeFlags_DefaultOpen)) return;
     DiskSettings& disk = app.disk;
+    ui::toggle("Afficher le disque", &app.showDisk, "Touche H.");
+    if (!app.showDisk) return;
 
-    ImGui::Checkbox("Afficher le disque (H)", &app.showDisk);
-    ImGui::SliderFloat("Rayon intérieur", &disk.innerRadius, 1.5f, 10.0f, "%.2f rs");
-    help("3 rs est la dernière orbite circulaire stable (ISCO). En dessous, "
-         "aucune orbite stable n'existe : le gaz tombe en chute libre.");
+    ui::slider("Bord intérieur", &disk.innerRadius, 1.5f, 10.0f, "%.2f rs",
+               "3 rs est la dernière orbite circulaire stable (ISCO). Plus près, "
+               "le gaz ne peut plus tourner : il tombe en chute libre.");
     disk.outerRadius = std::max(disk.outerRadius, disk.innerRadius + 0.5f);
-    ImGui::SliderFloat("Rayon extérieur", &disk.outerRadius, disk.innerRadius + 0.5f, 30.0f, "%.1f rs");
-    ImGui::SliderFloat("Température max", &disk.maxTemperature, 1500.0f, 30000.0f, "%.0f K",
-                       ImGuiSliderFlags_Logarithmic);
-    help("Couleur de corps noir du gaz le plus chaud (vers 4 rs). Un vrai disque "
-         "autour d'un trou noir stellaire atteint environ 10 millions de K et "
-         "brille surtout en rayons X ; ici on choisit la couleur visible.");
-    ImGui::SliderFloat("Luminosité", &disk.brightness, 0.1f, 6.0f, "%.2f",
-                       ImGuiSliderFlags_Logarithmic);
-    ImGui::SliderInt("Amas de gaz chaud", &disk.clumpCount, 0, 32);
-    help("Amas qui spiralent vers le trou noir en suivant la vitesse képlérienne "
-         "et chauffent en tombant.");
-    ImGui::Checkbox("Effet Doppler", &disk.doppler);
-    help("Le gaz qui vient vers nous paraît plus brillant et plus bleu, celui "
-         "qui s'éloigne plus sombre et plus rouge. Décochez pour comparer.");
-    ImGui::Checkbox("Décalage gravitationnel", &disk.gravitationalShift);
-    help("La lumière perd de l'énergie en sortant du puits de gravité : "
-         "facteur sqrt(1 - rs/r), fort près du bord intérieur.");
-    if (ImGui::Button("Disque par défaut"))
+    ui::slider("Bord extérieur", &disk.outerRadius, disk.innerRadius + 0.5f, 30.0f, "%.1f rs");
+    ui::slider("Température", &disk.maxTemperature, 1500.0f, 30000.0f, "%.0f K",
+               "Couleur du gaz le plus chaud (vers 4 rs). Un vrai disque atteint "
+               "~10 millions de K et brille surtout en rayons X ; ici on choisit "
+               "la couleur visible.", true);
+    ui::slider("Luminosité", &disk.brightness, 0.1f, 6.0f, "%.2f", nullptr, true);
+    ui::slider("Amas de gaz chaud", &disk.clumpCount, 0, 32, "%d",
+               "Amas qui spiralent vers le trou noir à la vitesse képlérienne "
+               "et chauffent en tombant.");
+    ui::toggle("Effet Doppler", &disk.doppler,
+               "Le gaz qui vient vers nous paraît plus brillant et plus bleu, "
+               "celui qui s'éloigne plus sombre et plus rouge.");
+    ui::toggle("Décalage gravitationnel", &disk.gravitationalShift,
+               "La lumière perd de l'énergie en sortant du puits de gravité : "
+               "facteur sqrt(1 - rs/r), fort près du bord intérieur.");
+    if (ui::button("Valeurs par défaut"))
         disk = DiskSettings{};
 }
+UI_SECTION(ui::Tab::Object, 20, "Disque d'accrétion", diskCard, isBlackHole);
 
-// Couleur approchée d'un corps noir (même formule que blackbody() du shader).
-ImVec4 blackbodyColor(double temperature)
-{
-    double t = std::clamp(temperature, 1000.0, 40000.0) / 100.0;
-    auto c01 = [](double v) { return float(std::clamp(v, 0.0, 1.0)); };
-    float r = t <= 66.0 ? 1.0f : c01(1.29293618 * std::pow(t - 60.0, -0.1332047592));
-    float g = t <= 66.0 ? c01(0.39008157 * std::log(t) - 0.63184144)
-                        : c01(1.12989086 * std::pow(t - 60.0, -0.0755148492));
-    float b = t >= 66.0 ? 1.0f : (t <= 19.0 ? 0.0f : c01(0.54320678 * std::log(t - 10.0) - 1.19625408));
-    return ImVec4(r, g, b, 1.0f);
-}
+// --- Onglet Objet : étoile ------------------------------------------------------
 
-bool sliderDouble(const char* label, double* v, double lo, double hi, const char* fmt, bool log = false)
+void starCard(App& app)
 {
-    return ImGui::SliderScalar(label, ImGuiDataType_Double, v, &lo, &hi, fmt,
-                               log ? ImGuiSliderFlags_Logarithmic : ImGuiSliderFlags_None);
-}
-
-void sceneSection(App& app)
-{
-    int scene = app.starMode ? 1 : 0;
-    ImGui::TextUnformatted("Scène :");
-    ImGui::SameLine();
-    bool changed = ImGui::RadioButton("Trou noir", &scene, 0);
-    ImGui::SameLine();
-    changed |= ImGui::RadioButton("Étoile (E)", &scene, 1);
-    if (changed)
-        setStarMode(app, scene == 1);
-}
-
-void starSection(App& app)
-{
-    if (!ImGui::CollapsingHeader("Étoile", ImGuiTreeNodeFlags_DefaultOpen)) return;
-    Star& star = app.star;
+    const Star& star = app.star;
     const auto& presets = starPresets();
 
-    // Étoiles réelles (paramètres mesurés).
+    // Pastille de la couleur de l'étoile, nom et type.
+    const float d = ImGui::GetFontSize() * 2.6f;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const ImVec4 col = ui::blackbodyColor(star.temperature);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 c(p.x + d * 0.5f, p.y + d * 0.5f);
+    dl->AddCircleFilled(c, d * 0.62f, ImGui::ColorConvertFloat4ToU32(ImVec4(col.x, col.y, col.z, 0.15f)));
+    dl->AddCircleFilled(c, d * 0.5f, ImGui::ColorConvertFloat4ToU32(col));
+    ImGui::Dummy(ImVec2(d, d));
+    ImGui::SameLine(0.0f, ImGui::GetFontSize() * 0.9f);
+    ImGui::BeginGroup();
+    ImGui::PushFont(ui::boldFont());
+    ImGui::TextUnformatted(star.name.c_str());
+    ImGui::PopFont();
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::color::muted), "%s · classe %s",
+                       star.kind.c_str(), star.spectralClass().c_str());
+    ImGui::EndGroup();
+
+    ImGui::SetNextItemWidth(-FLT_MIN);
     const char* current = app.starIndex >= 0 ? presets[app.starIndex].name.c_str() : "Sur mesure";
-    if (ImGui::BeginCombo("Étoile connue (N / B)", current)) {
+    if (ImGui::BeginCombo("##connue", current)) {
         for (int i = 0; i < int(presets.size()); ++i) {
             if (ImGui::Selectable(presets[i].name.c_str(), i == app.starIndex))
                 selectPreset(app, i);
-            if (ImGui::IsItemHovered())
-                ImGui::SetItemTooltip("%s", presets[i].kind.c_str());
+            ImGui::SetItemTooltip("%s", presets[i].kind.c_str());
         }
         ImGui::EndCombo();
     }
+    ImGui::SetItemTooltip("Étoiles réelles. Touches N / B : suivante / précédente.");
+}
+UI_SECTION(ui::Tab::Object, 10, "Étoile", starCard, isStar);
 
-    // Créer une étoile à partir de sa seule masse.
-    ImGui::SeparatorText("Créer une étoile");
+void createStarCard(App& app)
+{
     static int family = 0;          // 0 = séquence principale, 1 = naine blanche
     static double msMass = 1.0;
     static double wdMass = 0.6, wdTemp = 20000.0;
-    ImGui::RadioButton("Séquence principale", &family, 0);
-    ImGui::SameLine();
-    ImGui::RadioButton("Naine blanche", &family, 1);
+    static const char* const families[] = {"Comme le Soleil", "Naine blanche"};
+    ui::segmented("famille", &family, families, 2);
+
     if (family == 0) {
-        if (sliderDouble("Masse##ms", &msMass, 0.08, 100.0, "%.3g x Soleil", true))
+        if (ui::slider("Masse##ms", &msMass, 0.08, 100.0, "%.3g × Soleil",
+                       "Étoile qui brûle son hydrogène. La masse suffit : elle donne "
+                       "la luminosité (L ~ M^3,5) et le rayon, puis la température. "
+                       "0,1 soleil : naine rouge. 20 soleils : géante bleue.", true))
             selectMainSequence(app, msMass);
-        help("Étoile qui brûle son hydrogène, comme le Soleil. La masse suffit : "
-             "la relation masse-luminosité (L ~ M^3,5 à M^4) et la relation "
-             "masse-rayon donnent L et R, puis Stefan-Boltzmann donne la "
-             "température. 0,1 soleil : naine rouge. 20 soleils : étoile bleue.");
     } else {
-        bool c = sliderDouble("Masse##wd", &wdMass, 0.2, 1.42, "%.3g x Soleil");
-        c |= sliderDouble("Température##wd", &wdTemp, 4000.0, 100000.0, "%.0f K", true);
+        bool c = ui::slider("Masse##wd", &wdMass, 0.2, 1.42, "%.3g × Soleil",
+                            "Cœur d'étoile éteinte, de la taille de la Terre. Plus "
+                            "elle est lourde, plus elle est PETITE ; au-delà de "
+                            "1,44 soleil elle s'effondre.");
+        c |= ui::slider("Température##wd", &wdTemp, 4000.0, 100000.0, "%.0f K", nullptr, true);
         if (c) {
             app.starIndex = -1;
-            star = whiteDwarf(wdMass, wdTemp);
+            app.star = whiteDwarf(wdMass, wdTemp);
         }
-        help("Coeur d'étoile éteinte, de la taille de la Terre. Plus elle est "
-             "lourde, plus elle est PETITE (relation de Chandrasekhar) ; "
-             "au-delà de 1,44 soleil elle s'effondre.");
     }
+}
+UI_SECTION(ui::Tab::Object, 20, "Créer une étoile", createStarCard, isStar);
 
-    // Réglage libre de chaque grandeur.
-    ImGui::SeparatorText("Réglages fins");
+void tuneStarCard(App& app)
+{
+    Star& star = app.star;
     bool edited = false;
-    edited |= sliderDouble("Masse", &star.mass, 0.05, 150.0, "%.3g x Soleil", true);
-    edited |= sliderDouble("Rayon", &star.radius, 1e-5, 2000.0, "%.3g x Soleil", true);
-    help("En rayons du Soleil (696 000 km). Étoile à neutrons : ~0,00002 ; "
-         "Bételgeuse : ~760.");
-    edited |= sliderDouble("Température", &star.temperature, 2000.0, 1.0e6, "%.0f K", true);
-    edited |= sliderDouble("Rotation", &star.rotationDays, 1e-5, 40000.0, "%.3g jours", true);
-    help("Période de rotation à l'équateur. Pour une étoile froide, c'est elle "
-         "qui fixe l'activité magnétique (section Activité) : plus l'étoile "
-         "tourne vite, plus elle a de taches et d'éruptions.");
+    edited |= ui::slider("Masse", &star.mass, 0.05, 150.0, "%.3g × Soleil", nullptr, true);
+    edited |= ui::slider("Rayon", &star.radius, 1e-5, 2000.0, "%.3g × Soleil",
+                         "1 = 696 000 km. Étoile à neutrons : ~0,00002 ; "
+                         "Bételgeuse : ~760.", true);
+    edited |= ui::slider("Température", &star.temperature, 2000.0, 1.0e6, "%.0f K", nullptr, true);
+    edited |= ui::slider("Rotation", &star.rotationDays, 1e-5, 40000.0, "%.3g jours",
+                         "Période à l'équateur. Pour une étoile froide, elle fixe "
+                         "l'activité magnétique (carte Activité).", true);
     if (edited && app.starIndex >= 0) {
         app.starIndex = -1;
         star.name = "Sur mesure";
     }
-
-    // Grandeurs déduites par le modèle physique (src/star.cpp).
-    ImGui::SeparatorText("Ce que la physique en déduit");
-    ImGui::ColorButton("##couleur", blackbodyColor(star.temperature),
-                       ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoPicker,
-                       ImVec2(ImGui::GetFontSize() * 1.6f, ImGui::GetFontSize() * 1.6f));
-    ImGui::SameLine();
-    ImGui::Text("%s, classe %s", star.kind.c_str(), star.spectralClass().c_str());
-    ImGui::Text("Luminosité : %.3g fois le Soleil", star.luminosity());
-    help("Stefan-Boltzmann : L = R² (T / 5772 K)^4.");
-    ImGui::Text("Gravité de surface : %.3g fois le Soleil", star.surfaceGravity());
-    ImGui::Text("Compacité rs/R : %.2g", star.compactness());
-    help("Rapport entre le rayon de Schwarzschild de l'étoile et son rayon. "
-         "Quasi nul pour le Soleil (la lumière va tout droit), ~0,35 pour une "
-         "étoile à neutrons : on voit alors une partie de sa face cachée. "
-         "1 = elle devient un trou noir.");
 }
+UI_SECTION(ui::Tab::Object, 30, "Réglages fins", tuneStarCard, isStar);
 
-// Activité magnétique et oscillations (modèles de src/activity.cpp).
-void activitySection(App& app)
+void starPhysicsCard(App& app)
 {
-    if (!ImGui::CollapsingHeader("Activité de l'étoile", ImGuiTreeNodeFlags_DefaultOpen)) return;
     const Star& star = app.star;
-    const StellarActivity act = computeActivity(star);
-    char a[32], b[32];
-
-    if (star.radius < 0.02) {
-        ImGui::TextWrapped("Objet dégénéré : plus de fusion ni de convection, donc ni taches, "
-                           "ni cycle, ni éruptions de type solaire.");
-        return;
-    }
-
-    // Dynamo et relation rotation-activité.
-    ImGui::SeparatorText("Dynamo");
-    if (act.convective <= 0.0) {
-        ImGui::TextWrapped("Pas de dynamo : au-dessus de ~6 700 K l'enveloppe est radiative "
-                           "(cassure de Kraft). Ni taches, ni cycle, ni éruptions.");
-    } else {
-        ImGui::Text("Retournement convectif tau_c : %.3g jours", act.turnoverDays);
-        help("Temps que met une cellule de convection pour remonter. "
-             "Naines : log tau_c = 2,33 - 1,50 M + 0,31 M² (Wright et al. 2018). "
-             "Géantes : ~150 jours (Gunn et al. 1998).");
-        ImGui::Text("Nombre de Rossby Ro = P/tau_c : %.3g%s", act.rossby,
-                    act.saturated ? "  (saturé)" : "");
-        help("Ro petit = rotation rapide devant la convection = dynamo efficace. "
-             "Sous Ro = 0,13 l'activité plafonne (régime saturé).");
-        ImGui::Text("Rayons X : L_X / L_bol = %.2g", act.xrayRatio);
-        help("Relation rotation-activité (Wright et al. 2011) : "
-             "10^-3,13 si Ro < 0,13, sinon 10^-3,13 (Ro / 0,13)^-2,7.");
-    }
-
-    // Cycle, taches, facules.
-    if (act.active()) {
-        CycleState cyc = cycleState(act, cyclePhase(app, act));
-        ImGui::SeparatorText("Cycle magnétique et taches");
-        if (act.cycleYears > 0.0) {
-            ImGui::Text("Période du cycle : %.3g ans", act.cycleYears);
-            help("Branche « inactive » de Böhm-Vitense (2007) : P_cyc = 158 P_rot "
-                 "(11 ans pour le Soleil). Forme du cycle : Hathaway (1994), "
-                 "montée rapide puis descente lente.");
-            float phase = float(cyclePhase(app, act));
-            if (ImGui::SliderFloat("Phase du cycle", &phase, 0.0f, 0.999f, "%.2f")) {
-                double p = starDays(app) / (act.cycleYears * 365.25);
-                app.cyclePhaseOffset = phase - (p - std::floor(p));
-            }
-            help("0 = minimum. Maximum vers 0,4.");
-        } else {
-            ImGui::TextWrapped("Pas de cycle régulier : rotation trop rapide (régime saturé), "
-                               "l'activité reste au maximum.");
-        }
-        ImGui::Text("Niveau d'activité : %.2f x la moyenne", cyc.level);
-        ImGui::Text("Surface tachée : %.2g %%  (moyenne %.2g %%)",
-                    100.0 * act.spotCoverage * cyc.level, 100.0 * act.spotCoverage);
-        help("Fraction moyenne calée entre le Soleil (~0,1 %) et les naines M "
-             "saturées (~40 %, O'Neal et al. 2004) : f = 0,4 (L_X / L_X,sat)^0,84.");
-        ImGui::Text("Latitude des taches : %.0f° (cycle précédent : %.0f°)",
-                    cyc.bandLatDeg[0], cyc.bandLatDeg[1]);
-        help("Loi de Spörer : les taches naissent vers 28° et migrent vers "
-             "l'équateur au fil du cycle, lat = 28° exp(-t / 90 mois) "
-             "(diagramme papillon). Les rotateurs rapides ont des taches "
-             "polaires (Schüssler & Solanki 1992).");
-        ImGui::Text("Ombre : %.0f K   pénombre : %.0f K", act.umbraTemp, act.penumbraTemp);
-        help("Écart de température mesuré sur les taches stellaires "
-             "(Berdyugina 2005) : ~1 700 K pour le Soleil, ~200 K pour les "
-             "naines M. Brillance : (T_tache / T)^4.");
-        ImGui::Text("Facules : %.2g %% de la surface", 100.0 * act.faculaCoverage * cyc.level);
-        help("Régions magnétiques brillantes, surtout visibles près du bord.");
-        ImGui::Text("Durée de vie d'une tache : %.0f jours", act.spotLifetimeDays);
-        help("Règle de Gnevyshev-Waldmeier : durée = aire max / 10 MSH par jour.");
-
-        // Rotation différentielle.
-        ImGui::SeparatorText("Rotation différentielle");
-        double pole = star.rotationDays / std::max(1.0 - act.shearRatio, 1e-6);
-        ImGui::Text("Équateur : %.3g j   pôles : %.3g j", star.rotationDays, pole);
-        help("Omega(lat) = Omega_eq (1 - alpha sin² lat) (Snodgrass). Cisaillement "
-             "dOmega = 0,073 rad/jour × (T / 5772 K)^8,6 (Collier Cameron 2007) : "
-             "fort pour les étoiles F, quasi nul pour les naines M.");
-
-        // Éruptions.
-        ImGui::SeparatorText("Éruptions");
-        ImGui::Text("Fréquence : %.3g par jour (E > 1 s × L_bol)", act.flaresPerDay * cyc.level);
-        help("Proportionnelle à l'émission X, calée sur la naine M GJ 1243 "
-             "(Hawley et al. 2014). Énergies en loi de puissance dN/dE prop. à E^-2, "
-             "profil de Davenport (2014), plasma à ~9 000 K. Affichées au ralenti.");
-        ImGui::Text("Affichées : E > %.3g s × L_bol   en cours : %d   total : %d",
-                    app.flares.visibleThresholdSeconds(), app.flares.count(), app.flares.total());
-    }
-
-    // Oscillations.
-    if (act.oscAmplitude > 0.0) {
-        ImGui::SeparatorText("Oscillations");
-        formatDuration(1.0 / (act.numaxMicroHz * 1e-6), a, sizeof(a));
-        formatDuration(1.0 / (act.deltaNuMicroHz * 1e-6), b, sizeof(b));
-        ImGui::Text("Période : %s   amplitude : %.2g %%", a, 100.0 * act.oscAmplitude);
-        help("Ondes sonores excitées par la convection. "
-             "nu_max = 3 090 µHz (g / g_sol) (T / T_sol)^-1/2 ; "
-             "dL/L = 4,7 ppm (L / M)^0,8 (Kjeldsen & Bedding 1995). "
-             "Trop rapides pour être vues sur le Soleil (5 min).");
-    }
+    ui::value("Luminosité", "%.3g × Soleil", star.luminosity());
+    ui::value("Gravité de surface", "%.3g × Soleil", star.surfaceGravity());
+    ui::value("Compacité rs/R", "%.2g", star.compactness());
+    ui::note("Compacité : quasi nulle pour le Soleil (la lumière va tout droit), "
+             "~0,35 pour une étoile à neutrons (on voit une partie de sa face "
+             "cachée), 1 pour un trou noir.");
 }
+UI_SECTION(ui::Tab::Object, 40, "Ce que la physique en déduit", starPhysicsCard, isStar);
 
-void cameraSection(App& app)
+// --- Onglet Vue ------------------------------------------------------------------
+
+void cameraCard(App& app)
 {
-    if (!ImGui::CollapsingHeader("Caméra")) return;
     OrbitCamera& cam = app.camera;
-
-    ImGui::SliderFloat("Distance", &cam.targetDistance, kMinDistance, kMaxDistance,
-                       app.starMode ? "%.1f rayons d'étoile" : "%.1f rs", ImGuiSliderFlags_Logarithmic);
+    ui::slider("Distance", &cam.targetDistance, kMinDistance, kMaxDistance,
+               app.starMode ? "%.1f rayons" : "%.1f rs", "Molette de la souris.", true);
     float yawDeg = std::remainder(cam.yaw, 2.0f * kPi) * kRad2Deg;
-    if (ImGui::SliderFloat("Angle horizontal", &yawDeg, -180.0f, 180.0f, "%.0f°")) {
+    if (ui::slider("Angle horizontal", &yawDeg, -180.0f, 180.0f, "%.0f°")) {
         cam.yaw = yawDeg / kRad2Deg;
         cam.yawVel = 0.0f;
     }
     float pitchDeg = cam.pitch * kRad2Deg;
-    if (ImGui::SliderFloat("Hauteur", &pitchDeg, -kMaxPitch * kRad2Deg, kMaxPitch * kRad2Deg, "%.0f°")) {
+    if (ui::slider("Hauteur", &pitchDeg, -kMaxPitch * kRad2Deg, kMaxPitch * kRad2Deg, "%.0f°",
+                   "0° : dans le plan du disque. 86° : vue de dessus.")) {
         cam.pitch = pitchDeg / kRad2Deg;
         cam.pitchVel = 0.0f;
     }
-    help("0° : dans le plan du disque. 86° : vue de dessus.");
     float fovDeg = cam.fovY * kRad2Deg;
-    if (ImGui::SliderFloat("Champ de vision", &fovDeg, 20.0f, 120.0f, "%.0f°"))
+    if (ui::slider("Champ de vision", &fovDeg, 20.0f, 120.0f, "%.0f°"))
         cam.fovY = fovDeg / kRad2Deg;
-    ImGui::Checkbox("Orbite automatique (Espace)", &cam.autoOrbit);
-    if (ImGui::Button("Recentrer (C)"))
+    ui::toggle("Orbite automatique", &cam.autoOrbit, "Touche Espace.");
+    if (ui::button("Recentrer la vue"))
         resetCamera(app);
 }
+UI_SECTION(ui::Tab::View, 10, "Caméra", cameraCard);
 
-void renderSection(App& app, const UiStats& stats)
+// --- Onglet Rendu ----------------------------------------------------------------
+
+void performanceCard(App& app)
 {
-    if (!ImGui::CollapsingHeader("Rendu")) return;
-
-    ImGui::Text("%d FPS   image %dx%d   GPU %.1f ms", stats.fps, stats.traceWidth,
-                stats.traceHeight, stats.gpuMs);
-    ImGui::Checkbox("Résolution automatique (O)", &app.autoScale);
-    help("Baisse ou monte la résolution du ray tracing pour tenir le nombre "
-         "d'images par seconde visé.");
-    if (ImGui::SliderFloat("Résolution", &app.renderScale, kMinScale, kMaxScale, "%.2f x fenêtre"))
+    ui::toggle("Résolution automatique", &app.autoScale,
+               "Baisse ou monte la résolution du ray tracing pour tenir le "
+               "nombre d'images par seconde visé. Touche O.");
+    if (ui::slider("Résolution", &app.renderScale, kMinScale, kMaxScale, "%.2f × fenêtre",
+                   "Touches K / L."))
         app.autoScale = false;
-    ImGui::SliderFloat("FPS visé", &app.targetFps, 15.0f, 120.0f, "%.0f");
-    ImGui::SliderInt("Pas max par rayon", &app.maxSteps, 50, 600);
-    help("Garde-fou. Un rayon qui s'échappe prend environ 20 pas, un rayon qui "
-         "fait le tour de la sphère de photons environ 30.");
-    ImGui::SliderFloat("Exposition", &app.exposure, 0.2f, 4.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
-    if (ImGui::Button("Recharger les shaders (R)"))
+    ui::slider("Images par seconde visées", &app.targetFps, 15.0f, 120.0f, "%.0f");
+    ui::slider("Pas max par rayon", &app.maxSteps, 50, 600, "%d",
+               "Garde-fou. Un rayon qui s'échappe prend environ 20 pas, un rayon "
+               "qui tourne autour de la sphère de photons environ 30.");
+    ui::subheading("Mesures");
+    ui::value("Image calculée", "%d × %d", gStats.traceWidth, gStats.traceHeight);
+    ui::value("Temps GPU par image", "%.1f ms", gStats.gpuMs);
+}
+UI_SECTION(ui::Tab::Render, 10, "Performance", performanceCard);
+
+void imageCard(App& app)
+{
+    ui::slider("Exposition", &app.exposure, 0.2f, 4.0f, "%.2f", nullptr, true);
+    if (ui::button("Recharger les shaders"))
         app.reloadRequested = true;
+    ImGui::SetItemTooltip("Touche R : relit les fichiers .frag sans relancer.");
+}
+UI_SECTION(ui::Tab::Render, 20, "Image", imageCard);
+
+// --- Onglet Aide -----------------------------------------------------------------
+
+// Touche dessinée comme une petite touche de clavier.
+void keycap(const char* key)
+{
+    ImGui::PushFont(ui::boldFont());
+    const ImVec2 ts = ImGui::CalcTextSize(key);
+    const float padX = ImGui::GetFontSize() * 0.4f;
+    const float h = ImGui::GetTextLineHeight() + 4.0f;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const ImVec2 size(std::max(ts.x + 2.0f * padX, h), h);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y), ImGui::GetColorU32(ImGuiCol_FrameBg), 5.0f);
+    dl->AddRect(p, ImVec2(p.x + size.x, p.y + size.y), ImGui::GetColorU32(ImGuiCol_Border), 5.0f);
+    dl->AddText(ImVec2(p.x + (size.x - ts.x) * 0.5f, p.y + (size.y - ts.y) * 0.5f),
+                ImGui::GetColorU32(ImGuiCol_Text), key);
+    ImGui::Dummy(size);
+    ImGui::PopFont();
 }
 
-void helpSection()
+void shortcutRow(std::initializer_list<const char*> keys, const char* action)
 {
-    if (!ImGui::CollapsingHeader("Commandes")) return;
-    ImGui::TextUnformatted(
-        "Clic gauche + glisser : tourner autour\n"
-        "Flèches / ZQSD : tourner autour\n"
-        "Molette / Page haut-bas : zoom\n"
-        "Espace : orbite automatique\n"
-        "C : recentrer   P : pause\n"
-        "+ / - : vitesse du temps\n"
-        "H : disque   R : recharger les shaders\n"
-        "K / L / O : résolution\n"
-        "E : trou noir / étoile\n"
-        "N / B : étoile suivante / précédente\n"
-        "I / U : étoile plus / moins massive\n"
-        "F1 ou Tab : cacher ce panneau\n"
-        "Échap : quitter");
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    bool first = true;
+    for (const char* k : keys) {
+        if (!first) ImGui::SameLine(0.0f, 4.0f);
+        keycap(k);
+        first = false;
+    }
+    ImGui::TableNextColumn();
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 2.0f);   // centré sur la touche
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::color::muted), "%s", action);
+}
+
+void helpTab()
+{
+    ui::beginCard("Souris");
+    ui::value("Clic gauche + glisser", "tourner autour");
+    ui::value("Molette", "zoom");
+    ui::endCard();
+
+    ui::beginCard("Clavier");
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(ImGui::GetFontSize() * 0.5f, 2.0f));
+    if (ImGui::BeginTable("##touches", 2, ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("touches", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("action", ImGuiTableColumnFlags_WidthStretch);
+        shortcutRow({"F1"}, "cacher ce panneau");
+        shortcutRow({"Espace"}, "orbite automatique");
+        shortcutRow({"P"}, "pause");
+        shortcutRow({"+", "-"}, "vitesse du temps");
+        shortcutRow({"C"}, "recentrer");
+        shortcutRow({"E"}, "trou noir / étoile");
+        shortcutRow({"N", "B"}, "étoile suivante / préc.");
+        shortcutRow({"I", "U"}, "étoile plus / moins lourde");
+        shortcutRow({"H"}, "disque d'accrétion");
+        shortcutRow({"K", "L", "O"}, "résolution");
+        shortcutRow({"R"}, "recharger les shaders");
+        shortcutRow({"Échap"}, "quitter");
+        ImGui::EndTable();
+    }
+    ImGui::PopStyleVar();
+    ui::note("Flèches ou ZQSD : tourner. Page haut / bas : zoom.");
+    ui::endCard();
+}
+
+// --- Éléments fixes du panneau ---------------------------------------------------
+
+ImU32 fpsColor(int fps, float target)
+{
+    if (fps >= target * 0.9f) return ui::color::good;
+    if (fps >= target * 0.6f) return ui::color::warn;
+    return ui::color::bad;
+}
+
+void header(App& app)
+{
+    ImGui::PushFont(ui::boldFont());
+    ImGui::SetWindowFontScale(1.25f);
+    ImGui::TextUnformatted("Simulateur");
+    ImGui::SetWindowFontScale(1.0f);
+    ImGui::PopFont();
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::color::muted), "Relativité générale · ray tracing");
+
+    // Bouton × pour cacher le panneau.
+    const float s = ImGui::GetFrameHeight();
+    const ImVec2 cursor = ImGui::GetCursorPos();
+    ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - s,
+                               ImGui::GetStyle().WindowPadding.y));
+    if (ImGui::InvisibleButton("##fermer", ImVec2(s, s)))
+        app.showUi = false;
+    const bool hovered = ImGui::IsItemHovered();
+    ImGui::SetItemTooltip("Cacher le panneau (F1)");
+    const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (hovered) dl->AddRectFilled(a, b, ImGui::GetColorU32(ImGuiCol_FrameBgHovered), s * 0.5f);
+    const float m = s * 0.32f;
+    const ImU32 xc = hovered ? ImGui::GetColorU32(ImGuiCol_Text) : ui::color::muted;
+    dl->AddLine(ImVec2(a.x + m, a.y + m), ImVec2(b.x - m, b.y - m), xc, 1.6f);
+    dl->AddLine(ImVec2(b.x - m, a.y + m), ImVec2(a.x + m, b.y - m), xc, 1.6f);
+    ImGui::SetCursorPos(cursor);
+    ImGui::Dummy(ImVec2(0.0f, 2.0f));
+}
+
+void playBar(App& app)
+{
+    // Gros bouton lecture / pause.
+    const float d = ImGui::GetFontSize() * 2.8f;
+    if (ImGui::InvisibleButton("##lecture", ImVec2(d, d)))
+        app.paused = !app.paused;
+    ImGui::SetItemTooltip(app.paused ? "Reprendre (P)" : "Pause (P)");
+    const bool hovered = ImGui::IsItemHovered();
+    const ImVec2 a = ImGui::GetItemRectMin();
+    const ImVec2 c(a.x + d * 0.5f, a.y + d * 0.5f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddCircleFilled(c, d * 0.5f, hovered ? IM_COL32(255, 178, 102, 255) : ui::color::accent);
+    const ImU32 ic = IM_COL32(24, 16, 8, 255);
+    const float k = d * 0.17f;
+    if (app.paused) {
+        dl->AddTriangleFilled(ImVec2(c.x - k * 0.8f, c.y - k * 1.15f), ImVec2(c.x - k * 0.8f, c.y + k * 1.15f),
+                              ImVec2(c.x + k * 1.25f, c.y), ic);
+    } else {
+        dl->AddRectFilled(ImVec2(c.x - k * 0.95f, c.y - k), ImVec2(c.x - k * 0.25f, c.y + k), ic, 1.5f);
+        dl->AddRectFilled(ImVec2(c.x + k * 0.25f, c.y - k), ImVec2(c.x + k * 0.95f, c.y + k), ic, 1.5f);
+    }
+
+    ImGui::SameLine(0.0f, ImGui::GetFontSize() * 0.9f);
+    ImGui::BeginGroup();
+    ui::slider("Vitesse du temps", &app.simSpeed, 0.25f, 200.0f, "× %.3g",
+               "Temps simulé (en rs/c) par seconde d'écran. Touches + et -.", true);
+    ImGui::EndGroup();
+
+    // Temps écoulé et remise à zéro.
+    char buf[64];
+    if (app.starMode) {
+        std::snprintf(buf, sizeof(buf), "t = %.0f s", app.simTime / 10.0);
+    } else {
+        char real[32];
+        formatDuration(app.simTime * kSunRsOverCSeconds * app.massSolar, real, sizeof(real));
+        std::snprintf(buf, sizeof(buf), "t = %.0f rs/c  ·  %s réels", app.simTime, real);
+    }
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::color::muted), "%s", buf);
+    const char* reset = "Remettre à 0";
+    const float bw = ImGui::CalcTextSize(reset).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - bw);
+    if (ImGui::Button(reset))
+        app.simTime = 0.0;
+}
+
+void sceneSelector(App& app)
+{
+    const auto& scenes = ui::scenes();
+    std::vector<const char*> names;
+    int current = -1;
+    for (int i = 0; i < int(scenes.size()); ++i) {
+        names.push_back(scenes[i].name);
+        if (current < 0 && scenes[i].isActive && scenes[i].isActive(app)) current = i;
+    }
+    int selected = current;
+    if (ui::segmented("scene", &selected, names.data(), int(names.size())) && scenes[selected].select)
+        scenes[selected].select(app);
+}
+
+// Onglets soulignés.
+void tabBar()
+{
+    static const char* const tabs[] = {"Objet", "Vue", "Rendu", "Aide"};
+    const int count = 4;
+    const float w = ImGui::GetContentRegionAvail().x;
+    const float h = ImGui::GetFrameHeight() + 2.0f;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddLine(ImVec2(p.x, p.y + h - 1.0f), ImVec2(p.x + w, p.y + h - 1.0f), ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
+    const float tw = w / count;
+    for (int i = 0; i < count; ++i) {
+        const ImVec2 a(p.x + tw * i, p.y);
+        ImGui::SetCursorScreenPos(a);
+        ImGui::PushID(i);
+        if (ImGui::InvisibleButton("##onglet", ImVec2(tw, h))) gTab = i;
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::PopID();
+        const bool selected = gTab == i;
+        if (selected) ImGui::PushFont(ui::boldFont());
+        const ImVec2 ts = ImGui::CalcTextSize(tabs[i]);
+        dl->AddText(ImVec2(a.x + (tw - ts.x) * 0.5f, a.y + (h - ts.y) * 0.5f - 1.0f),
+                    selected ? ImGui::GetColorU32(ImGuiCol_Text)
+                             : (hovered ? IM_COL32(200, 205, 215, 255) : ui::color::muted),
+                    tabs[i]);
+        if (selected) {
+            ImGui::PopFont();
+            dl->AddRectFilled(ImVec2(a.x + tw * 0.18f, a.y + h - 3.0f), ImVec2(a.x + tw * 0.82f, a.y + h),
+                              ui::color::accent, 1.5f);
+        }
+    }
+    ImGui::SetCursorScreenPos(p);
+    ImGui::Dummy(ImVec2(w, h));
+}
+
+void tabContent(App& app)
+{
+    if (gTab == 3) {
+        helpTab();
+        return;
+    }
+    const ui::Tab tab = static_cast<ui::Tab>(gTab);
+    bool any = false;
+    for (const ui::Section& s : ui::sections()) {
+        if (s.tab != tab || (s.visible && !s.visible(app))) continue;
+        ImGui::PushID(s.title);
+        ui::beginCard(s.title);
+        s.draw(app);
+        ui::endCard();
+        ImGui::PopID();
+        any = true;
+    }
+    if (!any) ui::note("Rien à régler ici pour cette scène.");
+}
+
+void footer(const App& app)
+{
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x;
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x, p.y), ImVec2(p.x + w, p.y),
+                                        ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
+    ImGui::Dummy(ImVec2(0.0f, 4.0f));
+
+    const ImU32 c = fpsColor(gStats.fps, app.targetFps);
+    const float r = ImGui::GetFontSize() * 0.28f;
+    const ImVec2 q = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddCircleFilled(
+        ImVec2(q.x + r, q.y + ImGui::GetTextLineHeight() * 0.5f), r, c);
+    ImGui::Dummy(ImVec2(r * 2.0f, ImGui::GetTextLineHeight()));
+    ImGui::SameLine();
+    ImGui::PushFont(ui::boldFont());
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(c), "%d FPS", gStats.fps);
+    ImGui::PopFont();
+    ImGui::SameLine();
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::color::muted), "·  %d × %d  ·  GPU %.1f ms",
+                       gStats.traceWidth, gStats.traceHeight, gStats.gpuMs);
+}
+
+void panel(App& app)
+{
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float width = std::min(ImGui::GetFontSize() * 23.0f, vp->WorkSize.x * 0.5f);
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(ImVec2(width, vp->WorkSize.y));
+    ImGui::Begin("##panneau", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoBringToFrontOnFocus);
+    // Liseré à droite du panneau.
+    const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(wp.x + ws.x - 1.0f, wp.y), ImVec2(wp.x + ws.x - 1.0f, wp.y + ws.y),
+                                        ImGui::GetColorU32(ImGuiCol_Border), 1.0f);
+
+    header(app);
+    playBar(app);
+    ImGui::Dummy(ImVec2(0.0f, 2.0f));
+    sceneSelector(app);
+    tabBar();
+
+    const float footerH = ImGui::GetTextLineHeightWithSpacing() + 12.0f;
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::BeginChild("##contenu", ImVec2(0.0f, -footerH));
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0.0f, 2.0f));
+    tabContent(app);
+    ImGui::EndChild();
+    footer(app);
+    ImGui::End();
+}
+
+// Panneau caché : petite pastille cliquable en haut à gauche.
+void collapsedPill(App& app)
+{
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float m = ImGui::GetFontSize() * 0.8f;
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + m, vp->WorkPos.y + m));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, ImGui::GetFontSize());
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ImGui::GetFontSize() * 0.8f, ImGui::GetFontSize() * 0.4f));
+    ImGui::SetNextWindowBgAlpha(0.75f);
+    ImGui::Begin("##pastille", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+    const ImVec2 start = ImGui::GetCursorScreenPos();
+    ImGui::BeginGroup();
+    const ImU32 c = fpsColor(gStats.fps, app.targetFps);
+    const float r = ImGui::GetFontSize() * 0.28f;
+    const ImVec2 q = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(q.x + r, q.y + ImGui::GetTextLineHeight() * 0.5f), r, c);
+    ImGui::Dummy(ImVec2(r * 2.0f, ImGui::GetTextLineHeight()));
+    ImGui::SameLine();
+    ImGui::Text("%d FPS", gStats.fps);
+    ImGui::SameLine(0.0f, ImGui::GetFontSize());
+    ImGui::PushFont(ui::boldFont());
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::color::accent), "F1");
+    ImGui::PopFont();
+    ImGui::SameLine();
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::color::muted), "Panneau");
+    ImGui::EndGroup();
+    const ImVec2 end = ImGui::GetItemRectMax();
+    ImGui::SetCursorScreenPos(start);
+    if (ImGui::InvisibleButton("##ouvrir", ImVec2(end.x - start.x, end.y - start.y)))
+        app.showUi = true;
+    ImGui::End();
+    ImGui::PopStyleVar(2);
 }
 
 } // namespace
@@ -431,17 +601,8 @@ void uiInit(GLFWwindow* window)
     glfwGetWindowContentScale(window, &xs, &ys);
     const float scale = std::max(1.0f, xs);
 
-    ImGui::StyleColorsDark();
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 6.0f;
-    style.FrameRounding = 4.0f;
-    style.GrabRounding = 4.0f;
-    style.Colors[ImGuiCol_WindowBg].w = 0.85f;
-    style.ScaleAllSizes(scale);
-
-    ImFontConfig font;
-    font.SizePixels = 13.0f * scale;
-    io.Fonts->AddFontDefault(&font);
+    ui::applyTheme(scale);
+    ui::loadFonts(scale);
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330 core");
@@ -459,47 +620,13 @@ bool uiWantsKeyboard() { return ImGui::GetIO().WantCaptureKeyboard; }
 
 void uiDraw(App& app, const UiStats& stats)
 {
+    gStats = stats;
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const float margin = 10.0f;
-    if (app.showUi) {
-        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + margin, vp->WorkPos.y + margin), ImGuiCond_FirstUseEver);
-        // Largeur fixe, hauteur ajustée au contenu sans dépasser la fenêtre.
-        const float width = ImGui::GetFontSize() * 30.0f;
-        ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f),
-                                            ImVec2(width, vp->WorkSize.y - 2.0f * margin));
-        if (ImGui::Begin("Contrôle de la simulation (F1)", &app.showUi,
-                         ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::PushItemWidth(ImGui::GetFontSize() * 13.0f);
-            sceneSection(app);
-            simulationSection(app);
-            if (app.starMode) {
-                starSection(app);
-                activitySection(app);
-            } else {
-                blackHoleSection(app);
-                diskSection(app);
-            }
-            cameraSection(app);
-            renderSection(app, stats);
-            helpSection();
-            ImGui::PopItemWidth();
-        }
-        ImGui::End();
-    } else {
-        // Rappel discret quand le panneau est caché.
-        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + margin, vp->WorkPos.y + margin));
-        ImGui::SetNextWindowBgAlpha(0.4f);
-        ImGui::Begin("##aide", nullptr,
-                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
-        ImGui::Text("F1 : panneau de contrôle   %d FPS", stats.fps);
-        ImGui::End();
-    }
+    if (app.showUi) panel(app);
+    else collapsedPill(app);
 
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
