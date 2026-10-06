@@ -44,12 +44,12 @@ finit, le pixel prend la couleur :
   cycle magnétique et loi de Spörer, rotation différentielle, éruptions,
   oscillations de luminosité. Les étoiles qui tournent vite sont les plus
   actives (nombre de Rossby).
+  Les étoiles peu compactes sont tracées en ligne droite (la déviation y est
+  inférieure à 0,1°), ce qui les rend environ 2,5 fois plus rapides.
 - **Couronne, protubérances et éjections de masse coronale** : couronne
   chaude et ses jets, protubérances roses au bord et filaments sombres sur
   le disque, nuages en corotation des étoiles rapides, éjections (touche
   `M`) et vent stellaire, tous déduits de l'activité.
-  Les étoiles peu compactes sont tracées en ligne droite (la déviation y est
-  inférieure à 0,1°), ce qui les rend environ 2,5 fois plus rapides.
 - **Panneau de contrôle** (Dear ImGui, police Inter, `F1` ou `Tab`) : lecture
   et vitesse du temps toujours visibles, onglets Objet (trou noir, disque,
   étoiles), Vue, Rendu et Touches (toutes les touches, avec recherche), ligne d'état avec les FPS, bulle d'aide sur
@@ -62,6 +62,8 @@ finit, le pixel prend la couleur :
 ![Étoiles simulées](blackhole/docs/etoiles.jpg)
 
 ![Activité d'une étoile : taches, facules et éruptions](blackhole/docs/activite.jpg)
+
+![Couronne, protubérances et éjection de masse coronale](blackhole/docs/couronne.jpg)
 
 ## Pulsars, magnétars, quasar et astéroïdes
 
@@ -215,6 +217,8 @@ Les détails et les mesures sont dans
         ├── binary.cpp/.hpp   système double : orbite, marée, transfert de gaz
         ├── binary_gfx.cpp/.hpp  dessin du gaz
         ├── ui_binary.cpp     carte « Système double »
+        ├── corona.cpp/.hpp   couronne, protubérances, éjections de masse coronale, vent
+        ├── ui_corona.cpp     cartes de la couronne et du vent
         └── shader.cpp/.hpp   chargement et compilation des shaders
 ```
 
@@ -236,6 +240,7 @@ La physique (équation des photons, horizon, disque, Doppler, modèle des
 | 9. Activité et objets compacts | Activité des étoiles par lois physiques ; pulsars, magnétars, quasar et astéroïdes |
 | 10. Touches et réglages | Onglet Touches, lentille désactivable (`V`, 60 % d'images en plus sans lentille), pas à pas (`T`), nouveaux réglages |
 | 11. Système double | Étoile compagne déformée par la marée, gaz arraché par le point L1 jusqu'au disque, anneau d'Einstein |
+| 12. Couronne et vent | Couronne, protubérances, éjections de masse coronale (`M`) et vent stellaire déduits de l'activité de l'étoile |
 
 ## Pistes pour la suite
 
