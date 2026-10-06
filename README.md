@@ -39,8 +39,12 @@ finit, le pixel prend la couleur :
   Sirius A et B, Rigel, Bételgeuse, Aldébaran, étoile à neutrons, ou une
   étoile créée à partir de sa masse. Couleur de corps noir, bord assombri,
   granulation, taches et lentille gravitationnelle pour les objets compacts.
-- **Panneau de contrôle** (Dear ImGui, `F1` ou `Tab`) : masse du trou noir,
-  disque, caméra, résolution, exposition, et choix ou réglage des étoiles.
+  Les étoiles peu compactes sont tracées en ligne droite (la déviation y est
+  inférieure à 0,1°), ce qui les rend environ 2,5 fois plus rapides.
+- **Panneau de contrôle** (Dear ImGui, police Inter, `F1` ou `Tab`) : lecture
+  et vitesse du temps toujours visibles, onglets Objet (trou noir, disque,
+  étoiles), Vue, Rendu et Aide, ligne d'état avec les FPS, bulle d'aide sur
+  chaque réglage.
 
 ![Panneau de contrôle](blackhole/docs/panneau.jpg)
 
@@ -111,6 +115,7 @@ Les détails et les mesures sont dans
 └── blackhole/
     ├── README.md             documentation technique et physique détaillée
     ├── CMakeLists.txt        build (GLFW système ou téléchargé, glad et ImGui embarqués)
+    ├── assets/fonts/         police Inter du panneau (licence OFL)
     ├── docs/                 images de rendu
     ├── external/glad/        chargeur OpenGL 3.3 core (fichiers générés)
     ├── external/imgui/       Dear ImGui (panneau de contrôle)
@@ -125,6 +130,7 @@ Les détails et les mesures sont dans
         ├── main.cpp          fenêtre, caméra, temps, boucle de rendu
         ├── app.hpp           état de la simulation partagé
         ├── ui.cpp/.hpp       panneau de contrôle
+        ├── ui_kit.cpp/.hpp   thème et composants du panneau
         ├── star.cpp/.hpp     modèle physique des étoiles
         └── shader.cpp/.hpp   chargement et compilation des shaders
 ```
@@ -143,6 +149,7 @@ La physique (équation des photons, horizon, disque, Doppler, modèle des
 | 5. Documentation | README racine complet, images de rendu à jour |
 | 6. Étoiles et panneau | Simulation d'étoiles, panneau de contrôle Dear ImGui |
 | 7. Couleurs | Couleurs de corps noir converties en lumière linéaire : étoiles froides et disque bien orangés |
+| 8. Nouveau panneau | Thème moderne avec onglets et cartes, police Inter, étoiles 2,5 fois plus rapides |
 
 ## Pistes pour la suite
 
