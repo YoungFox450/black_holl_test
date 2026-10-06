@@ -320,14 +320,16 @@ bool isBlack(GLuint tex, int faceSize)
     int level = 0;
     while ((faceSize >> level) > 8) ++level;
     int n = std::max(faceSize >> level, 1);
-    std::vector<float> px(size_t(n) * n * 3);
+    // Lecture en RGBA flottant avec une marge : c'est le format le plus sûr
+    // avec les pilotes Intel, qui peuvent écrire 4 composantes par pixel.
+    std::vector<float> px(size_t(n) * n * 4 + 64, 0.0f);
     float peak = 0.0f;
     glBindTexture(GL_TEXTURE_CUBE_MAP, tex);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
     for (int face = 0; face < 6; ++face) {
-        glGetTexImage(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, level, GL_RGB, GL_FLOAT, px.data());
-        for (float v : px)
-            if (std::isfinite(v)) peak = std::max(peak, v);
+        glGetTexImage(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, level, GL_RGBA, GL_FLOAT, px.data());
+        for (size_t i = 0; i < size_t(n) * n * 4; ++i)
+            if ((i & 3) != 3 && std::isfinite(px[i])) peak = std::max(peak, px[i]);
     }
     return peak < 1e-6f;
 }
