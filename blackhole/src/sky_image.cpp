@@ -220,41 +220,39 @@ bool loadSkyImage(const std::string& path, int maxWidth, SkyImage& out, std::str
     return true;
 }
 
-unsigned int bakeSkyFromImage(const std::string& shaderDir, unsigned int vao, int faceSize, SkySettings& s)
+namespace {
+
+// Texture source : RGB9_E5 compacte, ou RGB16F décompressée sur le CPU.
+GLuint uploadSource(bool asFloat)
 {
-    s.rebuild = false;
-    const std::string path = s.path.empty() ? defaultSkyImagePath() : s.path;
-    if (cache.path != path) {
-        std::string error;
-        GLint maxTex = 0;
-        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
-        if (!loadSkyImage(path, std::min(4096, std::max(int(maxTex), 1024)), cache, error)) {
-            cache = SkyImage{};
-            s.status = "Image illisible : " + path + " (" + error + ")";
-            std::cerr << s.status << "\n";
-            return 0;
-        }
-        // Les cartes NASA en coordonnées galactiques ont "_gal" dans leur nom.
-        if (!s.path.empty()) s.galactic = path.find("_gal") != std::string::npos || path.find("rgbe") != std::string::npos;
-    }
-
-    GLuint prog = loadShaderProgram({shaderDir + "/fullscreen.vert"}, {shaderDir + "/sky_image.frag"});
-    if (!prog) {
-        s.status = "Shader sky_image.frag introuvable";
-        return 0;
-    }
-
     GLuint src = 0;
     glGenTextures(1, &src);
     glBindTexture(GL_TEXTURE_2D, src);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB9_E5, cache.width, cache.height, 0, GL_RGB, GL_UNSIGNED_INT_5_9_9_9_REV,
-                 cache.packed.data());
+    if (asFloat) {
+        std::vector<float> rgb(cache.packed.size() * 3);
+        for (size_t i = 0; i < cache.packed.size(); ++i) {
+            uint32_t v = cache.packed[i];
+            float scale = std::ldexp(1.0f, int(v >> 27) - 15 - 9);
+            rgb[3 * i + 0] = float(v & 511u) * scale;
+            rgb[3 * i + 1] = float((v >> 9) & 511u) * scale;
+            rgb[3 * i + 2] = float((v >> 18) & 511u) * scale;
+        }
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, cache.width, cache.height, 0, GL_RGB, GL_FLOAT, rgb.data());
+    } else {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB9_E5, cache.width, cache.height, 0, GL_RGB,
+                     GL_UNSIGNED_INT_5_9_9_9_REV, cache.packed.data());
+    }
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return src;
+}
 
+// Projette l'image sur les 6 faces du cube, puis libère la source.
+GLuint renderSkyFaces(GLuint prog, GLuint vao, int faceSize, const SkySettings& s, GLuint src)
+{
     GLuint tex = 0;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_CUBE_MAP, tex);
@@ -290,12 +288,77 @@ unsigned int bakeSkyFromImage(const std::string& shaderDir, unsigned int vao, in
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glDeleteFramebuffers(1, &fbo);
     glDeleteTextures(1, &src);
-    glDeleteProgram(prog);
 
     glBindTexture(GL_TEXTURE_CUBE_MAP, tex);
     glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
+    return tex;
+}
+
+// Lit un petit niveau de mipmap (8x8 par face) : tout à zéro = ciel noir.
+bool isBlack(GLuint tex, int faceSize)
+{
+    int level = 0;
+    while ((faceSize >> level) > 8) ++level;
+    int n = std::max(faceSize >> level, 1);
+    std::vector<float> px(size_t(n) * n * 3);
+    float peak = 0.0f;
+    glBindTexture(GL_TEXTURE_CUBE_MAP, tex);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    for (int face = 0; face < 6; ++face) {
+        glGetTexImage(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, level, GL_RGB, GL_FLOAT, px.data());
+        for (float v : px)
+            if (std::isfinite(v)) peak = std::max(peak, v);
+    }
+    return peak < 1e-6f;
+}
+
+} // namespace
+
+unsigned int bakeSkyFromImage(const std::string& shaderDir, unsigned int vao, int faceSize, SkySettings& s)
+{
+    s.rebuild = false;
+    const std::string path = s.path.empty() ? defaultSkyImagePath() : s.path;
+    if (cache.path != path) {
+        std::string error;
+        GLint maxTex = 0;
+        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
+        if (!loadSkyImage(path, std::min(4096, std::max(int(maxTex), 1024)), cache, error)) {
+            cache = SkyImage{};
+            s.status = "Image illisible : " + path + " (" + error + ")";
+            std::cerr << s.status << "\n";
+            return 0;
+        }
+        // Les cartes NASA en coordonnées galactiques ont "_gal" dans leur nom.
+        if (!s.path.empty()) s.galactic = path.find("_gal") != std::string::npos || path.find("rgbe") != std::string::npos;
+    }
+
+    GLuint prog = loadShaderProgram({shaderDir + "/fullscreen.vert"}, {shaderDir + "/sky_image.frag"});
+    if (!prog) {
+        s.status = "Shader sky_image.frag introuvable";
+        return 0;
+    }
+
+    // Certains pilotes (Intel sous Windows notamment) acceptent la texture
+    // compacte RGB9_E5 mais la lisent en noir. On vérifie le résultat et on
+    // recommence avec une texture flottante classique si besoin.
+    GLuint tex = renderSkyFaces(prog, vao, faceSize, s, uploadSource(false));
+    const char* mode = "";
+    if (isBlack(tex, faceSize)) {
+        std::cerr << "Fond de ciel noir avec la texture RGB9_E5, nouvel essai en RGB16F\n";
+        glDeleteTextures(1, &tex);
+        tex = renderSkyFaces(prog, vao, faceSize, s, uploadSource(true));
+        mode = ", RGB16F";
+        if (isBlack(tex, faceSize)) {
+            glDeleteTextures(1, &tex);
+            glDeleteProgram(prog);
+            s.status = "Image chargée mais rendue noire par le pilote graphique : ciel procédural utilisé";
+            std::cerr << s.status << "\n";
+            return 0;
+        }
+    }
+    glDeleteProgram(prog);
     char buf[64];
-    std::snprintf(buf, sizeof(buf), " (%dx%d)", cache.width, cache.height);
+    std::snprintf(buf, sizeof(buf), " (%dx%d%s)", cache.width, cache.height, mode);
     s.status = path + buf;
     return tex;
 }
