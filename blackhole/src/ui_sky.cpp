@@ -17,11 +17,7 @@ void skyCard(App& app)
                    "lactée, Nuages de Magellan, Andromède, nébuleuses. Sinon, "
                    "ciel procédural."))
         s.rebuild = true;
-    if (!s.useImage) {
-        // Raison du retour au ciel procédural (lancement interrompu, pilote...).
-        if (!s.status.empty() && s.status != "Ciel procédural") ui::note(s.status.c_str());
-        return;
-    }
+    if (!s.useImage) return;
 
     bool c = ui::slider("Inclinaison de la Galaxie", &s.tilt, -90.0f, 90.0f, "%.0f°",
                         "Angle entre le plan de la Voie lactée et le disque du trou noir.");

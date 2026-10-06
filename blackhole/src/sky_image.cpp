@@ -315,41 +315,23 @@ GLuint renderSkyFaces(GLuint prog, GLuint vao, int faceSize, const SkySettings& 
 }
 
 // Lit un petit niveau de mipmap (8x8 par face) : tout à zéro = ciel noir.
-// On passe par un FBO et glReadPixels en RGBA flottant, la seule lecture
-// garantie par OpenGL pour une image flottante : glGetTexImage sur une
-// cubemap R11F_G11F_B10F peut renvoyer des zéros chez Intel, ce qui faisait
-// croire à un ciel noir et repasser à tort au ciel procédural. Au moindre
-// doute (FBO incomplet, erreur OpenGL), on garde l'image.
 bool isBlack(GLuint tex, int faceSize)
 {
-    while (glGetError() != GL_NO_ERROR) {}
     int level = 0;
     while ((faceSize >> level) > 8) ++level;
     int n = std::max(faceSize >> level, 1);
-    std::vector<float> px(size_t(n) * n * 4, 0.0f);
+    // Lecture en RGBA flottant avec une marge : c'est le format le plus sûr
+    // avec les pilotes Intel, qui peuvent écrire 4 composantes par pixel.
+    std::vector<float> px(size_t(n) * n * 4 + 64, 0.0f);
     float peak = 0.0f;
-    bool sure = true;
-    GLuint fbo = 0;
-    glGenFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, tex);
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
-    for (int face = 0; face < 6 && sure; ++face) {
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, tex,
-                               level);
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            sure = false;
-            break;
-        }
-        glReadBuffer(GL_COLOR_ATTACHMENT0);
-        glReadPixels(0, 0, n, n, GL_RGBA, GL_FLOAT, px.data());
-        for (size_t i = 0; i < px.size(); ++i)
+    for (int face = 0; face < 6; ++face) {
+        glGetTexImage(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, level, GL_RGBA, GL_FLOAT, px.data());
+        for (size_t i = 0; i < size_t(n) * n * 4; ++i)
             if ((i & 3) != 3 && std::isfinite(px[i])) peak = std::max(peak, px[i]);
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glDeleteFramebuffers(1, &fbo);
-    if (glGetError() != GL_NO_ERROR) sure = false;
-    if (!sure) std::cerr << "Fond de ciel : vérification impossible avec ce pilote, image gardée\n";
-    return sure && peak < 1e-6f;
+    return peak < 1e-6f;
 }
 
 } // namespace
