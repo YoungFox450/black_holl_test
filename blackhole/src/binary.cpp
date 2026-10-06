@@ -6,6 +6,7 @@
 namespace {
 
 constexpr double kGM = 0.5;   // G M du trou noir (rs = 2 G M / c² = 1)
+constexpr double kPi = 3.14159265358979323846;   // M_PI n'existe pas sous MSVC
 
 double length3(const double* v) { return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); }
 
@@ -24,7 +25,7 @@ double BinarySystem::omega() const
     return std::sqrt(kGM * (1.0 + settings.massRatio) / (a * a * a));
 }
 
-double BinarySystem::period() const { return 2.0 * M_PI / omega(); }
+double BinarySystem::period() const { return 2.0 * kPi / omega(); }
 
 double BinarySystem::rocheLobe() const { return settings.separation * eggleton(settings.massRatio); }
 
@@ -89,7 +90,7 @@ double BinarySystem::random01()
 double BinarySystem::gaussian()
 {
     double u = std::max(random01(), 1e-9), v = random01();
-    return std::sqrt(-2.0 * std::log(u)) * std::cos(2.0 * M_PI * v);
+    return std::sqrt(-2.0 * std::log(u)) * std::cos(2.0 * kPi * v);
 }
 
 void BinarySystem::clear()
