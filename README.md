@@ -32,19 +32,6 @@ finit, le pixel prend la couleur :
   gravitationnel vers le rouge.
 - On voit le dessus **et** le dessous du disque autour de l'ombre (lumière de
   l'arrière du disque courbée par le trou noir).
-- **Vrai ciel en fond** : la Voie lactée en HDR avec 118 000 étoiles réelles
-  (Hipparcos, Tycho-2), le Grand Rift, le bulbe du Sagittaire, les Nuages de
-  Magellan, Andromède et les grandes nébuleuses. Le trou noir la déforme :
-  le centre de la Galaxie forme un anneau autour de l'ombre. On peut charger
-  n'importe quelle carte équirectangulaire `.hdr`, `.exr`, `.jpg` ou `.png`
-  (`--sky-image`, carte « Fond de ciel » de l'onglet Rendu), ou revenir au
-  ciel procédural (`--procedural-sky`). Le ciel est projeté une seule fois
-  dans une cubemap : aucun coût par image. Si le pilote graphique lit la
-  texture compacte en noir (certains GPU Intel sous Windows), le programme
-  le détecte au démarrage et passe en RGB16F, ou au ciel procédural.
-
-![Voie lactée déformée par le trou noir](blackhole/docs/voie-lactee.jpg)
-
 - Caméra libre avec inertie, orbite automatique, pause et vitesse du temps.
 - Résolution de rendu réglée automatiquement pour tenir ~30 FPS.
 - **Simulation d'étoiles** (touche `E`) : Soleil, Proxima du Centaure,
@@ -200,16 +187,12 @@ Les détails et les mesures sont dans
     ├── README.md             documentation technique et physique détaillée
     ├── CMakeLists.txt        build (GLFW système ou téléchargé, glad et ImGui embarqués)
     ├── assets/fonts/         police Inter du panneau (licence OFL)
-    ├── assets/sky/           carte HDR de la Voie lactée (repère galactique)
     ├── docs/                 images de rendu
     ├── external/glad/        chargeur OpenGL 3.3 core (fichiers générés)
     ├── external/imgui/       Dear ImGui (panneau de contrôle)
-    ├── external/stb/, external/tinyexr/  lecture des images du ciel (en-têtes seuls)
-    ├── tools/make_milkyway.py  génère la carte du ciel depuis des catalogues réels
     ├── shaders/
     │   ├── blackhole.frag    le ray tracer : géodésiques, horizon, disque
     │   ├── sky.frag          fond de galaxie procédural, calculé une fois en cubemap
-    │   ├── sky_image.frag    projection de la carte du ciel dans la cubemap
     │   ├── star.frag         ray tracing d'une étoile, pulsar, magnétar
     │   ├── asteroid.vert/.frag  astéroïdes dessinés en points
     │   ├── gas.vert/.frag    gaz arraché à l'étoile compagne
@@ -234,9 +217,6 @@ Les détails et les mesures sont dans
         ├── ui_binary.cpp     carte « Système double »
         ├── corona.cpp/.hpp   couronne, protubérances, éjections de masse coronale, vent
         ├── ui_corona.cpp     cartes de la couronne et du vent
-        ├── sky_image.cpp/.hpp  lecture et réduction de la carte du ciel (HDR, EXR, JPEG, PNG)
-        ├── sky_loaders.cpp   stb_image et tinyexr
-        ├── ui_sky.cpp        carte « Fond de ciel »
         └── shader.cpp/.hpp   chargement et compilation des shaders
 ```
 
@@ -259,9 +239,7 @@ La physique (équation des photons, horizon, disque, Doppler, modèle des
 | 10. Touches et réglages | Onglet Touches, lentille désactivable (`V`, 60 % d'images en plus sans lentille), pas à pas (`T`), nouveaux réglages |
 | 11. Système double | Étoile compagne déformée par la marée, gaz arraché par le point L1 jusqu'au disque, anneau d'Einstein |
 | 12. Couronne et vent | Couronne, protubérances, éjections de masse coronale (`M`) et vent stellaire déduits de l'activité de l'étoile |
-| 13. Vrai ciel | Voie lactée en HDR à partir de catalogues réels, cartes `.hdr` / `.exr` / `.jpg` chargeables, gardée en RGB9_E5 (32 Mo au lieu de 100) |
-| 14. Quasar plus rapide | Pas courts seulement près de l'axe des jets : mode quasar 35 % plus rapide (85 → 55 ms par image en 960x540), même rendu |
-| 15. Ciel jamais noir | Repli automatique en RGB16F (puis ciel procédural) si le pilote lit RGB9_E5 en noir ; verdict gardé pour la session |
+| 13. Quasar plus rapide | Pas courts seulement près de l'axe des jets : mode quasar 35 % plus rapide (85 → 55 ms par image en 960x540), même rendu |
 
 ## Pistes pour la suite
 
