@@ -215,6 +215,38 @@ astres alors que l'horizon fait 60 km. Les rapports de masse, la taille des
 lobes et la position de L1 sont les vrais. Le disque est borné à 80 % du
 lobe du trou noir.
 
+## Fond de ciel : la vraie Voie lactée
+
+Le fond n'est plus inventé : c'est le ciel réel, calculé à partir de
+catalogues d'astronomie et stocké en HDR dans
+`assets/sky/voie-lactee.rgbe.png` (4096 x 2048, coordonnées galactiques).
+
+![Voie lactée](docs/voie-lactee.jpg)
+
+*À gauche, le centre de la Galaxie (Sagittaire) derrière le trou noir : sa
+lumière est déviée en anneau autour de l'ombre. À droite, la direction
+opposée, avec le Grand Nuage de Magellan en bas à droite.*
+
+| Contenu | Source |
+|---|---|
+| 118 000 étoiles, position, éclat et couleur (indice B-V → température, formule de Ballesteros) | catalogues Hipparcos et Tycho-2 |
+| Voie lactée diffuse, 5 niveaux de brillance (Grand Rift, nuages du Sagittaire et du Cygne) | contours de la Voie lactée |
+| Nuages de Magellan, Andromède, M33, nébuleuses d'Orion, de la Carène, de la Lagune, de l'Amérique du Nord, Pléiades | catalogue d'objets du ciel profond |
+
+Les données viennent de [d3-celestial](https://github.com/ofrohn/d3-celestial)
+(licence BSD) ; `tools/make_milkyway.py` refait l'image. Au démarrage,
+l'image est projetée une fois dans la cubemap du ciel : rien ne change pour
+la vitesse du rendu.
+
+Panneau, onglet Rendu, carte « Fond de ciel » : ciel réel ou procédural,
+inclinaison et orientation de la Galaxie, et chargement d'une autre image
+équirectangulaire `.hdr`, `.exr`, `.jpg` ou `.png`. Pour une vraie
+photographie, les Deep Star Maps de la NASA (domaine public,
+https://svs.gsfc.nasa.gov/4851) se chargent telles quelles, par exemple
+`starmap_2020_4k_gal.exr` (repère galactique, reconnu à `_gal` dans le nom)
+ou `starmap_2020_4k.exr` (repère équatorial). Les images plus larges que
+4096 pixels sont réduites au chargement.
+
 ## Installer les outils
 
 - **VS Code** avec les extensions recommandées (VS Code les propose à
@@ -349,6 +381,9 @@ Options :
 | `--mass M` | démarre sur une étoile de la séquence principale de M masses solaires |
 | `--quasar` | trou noir supermassif, disque très chaud et jets relativistes |
 | `--binary` | système double : étoile compagne dont le gaz est arraché |
+| `--sky-image F` | fond de ciel à partir de l'image F (`.hdr`, `.exr`, `.jpg`, `.png`) |
+| `--procedural-sky` | ciel procédural au lieu de la vraie Voie lactée |
+| `--sky-tilt A`, `--sky-yaw A` | inclinaison et orientation de la Voie lactée (degrés) |
 | `--bh-mass M` | masse du trou noir en masses solaires (change la limite de Roche des astéroïdes) |
 | `--field N` | ajoute un champ de N astéroïdes |
 | `--advance T` | fait avancer les astéroïdes de T unités de temps avant l'image (rs/c, ou secondes pour une étoile) |
@@ -360,6 +395,4 @@ Image fixe sans fenêtre (pleine résolution) :
 
 - Trou noir en rotation (métrique de Kerr) : ombre asymétrique.
 - Rendu progressif / anti-aliasing (plusieurs rayons par pixel).
-- Fond de ciel à partir d'une vraie image HDR de la Voie lactée (il suffit
-  de remplir la cubemap avec l'image au lieu de `sky.frag`).
 - Bloom autour du disque.

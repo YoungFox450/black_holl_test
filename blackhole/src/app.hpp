@@ -6,6 +6,7 @@
 #include "activity.hpp"
 #include "asteroids.hpp"
 #include "binary.hpp"
+#include "sky_image.hpp"
 #include "star.hpp"
 
 #include <algorithm>
@@ -147,6 +148,9 @@ struct App {
     // Système double : étoile compagne et gaz arraché (src/binary.*).
     // mutable : le gaz avance au moment du rendu, jusqu'au temps de l'image.
     mutable BinarySystem binary;
+
+    // Fond de ciel : vraie image de la Voie lactée ou ciel procédural (src/sky_image.*).
+    SkySettings sky;
 };
 
 // Affiche un message bref en bas de l'écran (retour visuel des touches).
