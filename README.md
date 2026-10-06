@@ -39,9 +39,7 @@ finit, le pixel prend la couleur :
   n'importe quelle carte équirectangulaire `.hdr`, `.exr`, `.jpg` ou `.png`
   (`--sky-image`, carte « Fond de ciel » de l'onglet Rendu), ou revenir au
   ciel procédural (`--procedural-sky`). Le ciel est projeté une seule fois
-  dans une cubemap : aucun coût par image. Si le pilote graphique lit la
-  texture compacte en noir (certains GPU Intel sous Windows), le programme
-  le détecte au démarrage et passe en RGB16F, ou au ciel procédural.
+  dans une cubemap : aucun coût par image.
 
 ![Voie lactée déformée par le trou noir](blackhole/docs/voie-lactee.jpg)
 
@@ -261,7 +259,6 @@ La physique (équation des photons, horizon, disque, Doppler, modèle des
 | 12. Couronne et vent | Couronne, protubérances, éjections de masse coronale (`M`) et vent stellaire déduits de l'activité de l'étoile |
 | 13. Vrai ciel | Voie lactée en HDR à partir de catalogues réels, cartes `.hdr` / `.exr` / `.jpg` chargeables, gardée en RGB9_E5 (32 Mo au lieu de 100) |
 | 14. Quasar plus rapide | Pas courts seulement près de l'axe des jets : mode quasar 35 % plus rapide (85 → 55 ms par image en 960x540), même rendu |
-| 15. Ciel jamais noir | Repli automatique en RGB16F (puis ciel procédural) si le pilote lit RGB9_E5 en noir ; verdict gardé pour la session |
 
 ## Pistes pour la suite
 
