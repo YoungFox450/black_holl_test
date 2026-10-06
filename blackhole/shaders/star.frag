@@ -412,10 +412,15 @@ vec3 activityLight(vec3 pos, vec3 dir, bool hit, float tHit, out float trans, ou
             float dd = length(rel) / rb;
             float m = dot(rel, d0) / (dd * rb + 1e-4);
             float layer = (dd - 0.9) / 0.1;
-            float rough = noise3(rel * (4.0 / rb) + seed);
-            shell += exp(-layer * layer) * smoothstep(-0.4, 0.6, m) * (0.15 + 1.6 * rough * rough * rough);
+            float ws = exp(-layer * layer) * smoothstep(-0.4, 0.6, m);
             vec3 rc = rel + d0 * 0.4 * rb;
-            core += exp(-dot(rc, rc) / (0.05 * rb * rb)) * (0.3 + rough);
+            float wc = exp(-dot(rc, rc) / (0.05 * rb * rb));
+            // Ni coquille ni coeur ici (l'interieur de la bulle est vide) :
+            // on saute le bruit, la partie chere de l'echantillon.
+            if (ws + wc < 0.01) continue;
+            float rough = noise3(rel * (4.0 / rb) + seed);
+            shell += ws * (0.15 + 1.6 * rough * rough * rough);
+            core += wc * (0.3 + rough);
         }
         float norm = dt / rb;
         vec3 l = (uCoronaTint * shell * 0.35 * 10.0 / 6.0 + HALPHA * core * 0.6) * norm * bright;
