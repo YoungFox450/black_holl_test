@@ -8,6 +8,7 @@
 #include <tinyexr.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -28,23 +29,61 @@ bool endsWith(std::string s, const std::string& suffix)
     return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
-// Réduit l'image d'un facteur entier (moyenne des blocs) : la lumière totale
-// est conservée, les étoiles ne disparaissent pas.
-void shrink(SkyImage& img, int maxWidth)
+// Remplit img.rgb depuis l'image source (srcW x srcH) en la réduisant au
+// passage d'un facteur entier (moyenne des blocs) si elle dépasse maxWidth :
+// la lumière totale est conservée, les étoiles ne disparaissent pas, et on
+// n'alloue jamais l'image pleine taille en flottants (une carte NASA en 16k
+// ferait 1,6 Go de plus).
+template <typename Get>
+void readReduced(SkyImage& img, int srcW, int srcH, int maxWidth, Get get)
 {
     int f = 1;
-    while (img.width / f > maxWidth) f *= 2;
-    if (f == 1) return;
-    int w = img.width / f, h = img.height / f;
-    std::vector<float> out(size_t(w) * h * 3, 0.0f);
-    for (int y = 0; y < h * f; ++y)
-        for (int x = 0; x < w * f; ++x)
-            for (int c = 0; c < 3; ++c)
-                out[(size_t(y / f) * w + x / f) * 3 + c] += img.rgb[(size_t(y) * img.width + x) * 3 + c];
-    for (float& v : out) v /= float(f * f);
-    img.rgb = std::move(out);
+    while (srcW / f > maxWidth) f *= 2;
+    const int w = srcW / f, h = srcH / f;
     img.width = w;
     img.height = h;
+    img.rgb.assign(size_t(w) * h * 3, 0.0f);
+    if (f == 1) {   // cas courant (carte 4096 px) : copie directe
+        for (size_t i = 0; i < size_t(w) * h; ++i)
+            for (int c = 0; c < 3; ++c) img.rgb[i * 3 + c] = get(i, c);
+        return;
+    }
+    const float inv = 1.0f / float(f * f);
+    for (int y = 0; y < h * f; ++y)
+        for (int x = 0; x < w * f; ++x) {
+            float* o = &img.rgb[(size_t(y / f) * w + x / f) * 3];
+            for (int c = 0; c < 3; ++c) o[c] += get(size_t(y) * srcW + x, c) * inv;
+        }
+}
+
+// Compacte l'image en RGB9_E5 (32 bits par texel, exposant commun) : c'est
+// le format de la texture source sur le GPU, deux fois moins lourd que
+// RGB16F (que les pilotes Intel stockent en RGBA16F, 8 octets par texel),
+// et l'image gardée en mémoire passe de 12 à 4 octets par texel.
+uint32_t packRgb9e5(const float* rgb)
+{
+    const float kMax = 65408.0f;   // (2^9 - 1) / 2^9 * 2^15
+    float r = std::clamp(rgb[0], 0.0f, kMax), g = std::clamp(rgb[1], 0.0f, kMax), b = std::clamp(rgb[2], 0.0f, kMax);
+    float m = std::max({r, g, b});
+    if (m < 1.0e-20f) return 0;
+    int ex = 0;
+    std::frexp(m, &ex);                         // m = f * 2^ex, f dans [0,5 ; 1[
+    int e = std::max(-16, ex - 1) + 1 + 15;     // exposant biaisé : floor(log2(m)) + 1 + 15
+    float scale = std::ldexp(1.0f, 9 - (e - 15));
+    if (int(std::floor(m * scale + 0.5f)) == 512) {
+        ++e;
+        scale *= 0.5f;
+    }
+    e = std::clamp(e, 0, 31);
+    auto q = [scale](float v) { return std::min(uint32_t(std::floor(v * scale + 0.5f)), 511u); };
+    return q(r) | (q(g) << 9) | (q(b) << 18) | (uint32_t(e) << 27);
+}
+
+void pack(SkyImage& img)
+{
+    img.packed.resize(size_t(img.width) * img.height);
+    for (size_t i = 0; i < img.packed.size(); ++i) img.packed[i] = packRgb9e5(&img.rgb[i * 3]);
+    std::vector<float>().swap(img.rgb);   // libère les flottants
 }
 
 // Ramène la luminance moyenne (pondérée par l'aire, cos(latitude)) à celle
@@ -66,7 +105,7 @@ void normalize(SkyImage& img)
     for (float& v : img.rgb) v *= scale;
 }
 
-bool loadPixels(const std::string& path, SkyImage& img, std::string& error)
+bool loadPixels(const std::string& path, int maxWidth, SkyImage& img, std::string& error)
 {
     if (endsWith(path, ".exr")) {
         float* rgba = nullptr;
@@ -76,9 +115,8 @@ bool loadPixels(const std::string& path, SkyImage& img, std::string& error)
             if (err) FreeEXRErrorMessage(err);
             return false;
         }
-        img.rgb.resize(size_t(img.width) * img.height * 3);
-        for (size_t i = 0; i < size_t(img.width) * img.height; ++i)
-            for (int c = 0; c < 3; ++c) img.rgb[i * 3 + c] = std::max(rgba[i * 4 + c], 0.0f);
+        readReduced(img, img.width, img.height, maxWidth,
+                    [rgba](size_t i, int c) { return std::max(rgba[i * 4 + c], 0.0f); });
         std::free(rgba);
         return true;
     }
@@ -87,19 +125,19 @@ bool loadPixels(const std::string& path, SkyImage& img, std::string& error)
         // RGBE dans un PNG : R, G, B mantisses, A = exposant + 128.
         stbi_uc* data = stbi_load(path.c_str(), &img.width, &img.height, &n, 4);
         if (!data) { error = stbi_failure_reason(); return false; }
-        img.rgb.resize(size_t(img.width) * img.height * 3);
-        for (size_t i = 0; i < size_t(img.width) * img.height; ++i) {
+        float scale[256];   // 2^(e - 136) pour chaque exposant (0 : noir)
+        for (int e = 0; e < 256; ++e) scale[e] = e ? std::ldexp(1.0f, e - 136) : 0.0f;
+        readReduced(img, img.width, img.height, maxWidth, [data, &scale](size_t i, int c) {
             const stbi_uc* p = data + i * 4;
-            float f = p[3] ? std::ldexp(1.0f, int(p[3]) - 136) : 0.0f;
-            for (int c = 0; c < 3; ++c) img.rgb[i * 3 + c] = (float(p[c]) + 0.5f) * f * (p[3] ? 1.0f : 0.0f);
-        }
+            return (float(p[c]) + 0.5f) * scale[p[3]];
+        });
         stbi_image_free(data);
         return true;
     }
     if (stbi_is_hdr(path.c_str())) {
         float* data = stbi_loadf(path.c_str(), &img.width, &img.height, &n, 3);
         if (!data) { error = stbi_failure_reason(); return false; }
-        img.rgb.assign(data, data + size_t(img.width) * img.height * 3);
+        readReduced(img, img.width, img.height, maxWidth, [data](size_t i, int c) { return data[i * 3 + c]; });
         stbi_image_free(data);
         return true;
     }
@@ -107,11 +145,13 @@ bool loadPixels(const std::string& path, SkyImage& img, std::string& error)
     // l'éclat aux points saturés (étoiles brillantes écrêtées à 255).
     stbi_uc* data = stbi_load(path.c_str(), &img.width, &img.height, &n, 3);
     if (!data) { error = stbi_failure_reason(); return false; }
-    img.rgb.resize(size_t(img.width) * img.height * 3);
-    for (size_t i = 0; i < img.rgb.size(); ++i) {
-        float v = std::pow(data[i] / 255.0f, 2.2f);
-        img.rgb[i] = v * (1.0f + 8.0f * std::pow(v, 6.0f));
+    // Table : 256 valeurs possibles, inutile de refaire deux pow par octet.
+    float lut[256];
+    for (int k = 0; k < 256; ++k) {
+        float v = std::pow(k / 255.0f, 2.2f);
+        lut[k] = v * (1.0f + 8.0f * std::pow(v, 6.0f));
     }
+    readReduced(img, img.width, img.height, maxWidth, [data, &lut](size_t i, int c) { return lut[data[i * 3 + c]]; });
     stbi_image_free(data);
     return true;
 }
@@ -173,9 +213,9 @@ bool loadSkyImage(const std::string& path, int maxWidth, SkyImage& out, std::str
 {
     SkyImage img;
     img.path = path;
-    if (!loadPixels(path, img, error)) return false;
-    shrink(img, maxWidth);
+    if (!loadPixels(path, maxWidth, img, error)) return false;
     normalize(img);
+    pack(img);
     out = std::move(img);
     return true;
 }
@@ -186,7 +226,9 @@ unsigned int bakeSkyFromImage(const std::string& shaderDir, unsigned int vao, in
     const std::string path = s.path.empty() ? defaultSkyImagePath() : s.path;
     if (cache.path != path) {
         std::string error;
-        if (!loadSkyImage(path, 4096, cache, error)) {
+        GLint maxTex = 0;
+        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
+        if (!loadSkyImage(path, std::min(4096, std::max(int(maxTex), 1024)), cache, error)) {
             cache = SkyImage{};
             s.status = "Image illisible : " + path + " (" + error + ")";
             std::cerr << s.status << "\n";
@@ -202,17 +244,12 @@ unsigned int bakeSkyFromImage(const std::string& shaderDir, unsigned int vao, in
         return 0;
     }
 
-    GLint maxTex = 0;
-    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
-    if (cache.width > maxTex) {
-        shrink(cache, maxTex);
-    }
-
     GLuint src = 0;
     glGenTextures(1, &src);
     glBindTexture(GL_TEXTURE_2D, src);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, cache.width, cache.height, 0, GL_RGB, GL_FLOAT, cache.rgb.data());
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB9_E5, cache.width, cache.height, 0, GL_RGB, GL_UNSIGNED_INT_5_9_9_9_REV,
+                 cache.packed.data());
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);

@@ -11,6 +11,7 @@
 // encodé en RGBE dans un PNG, comme assets/sky/voie-lactee.rgbe.png), et
 // .jpg / .png ordinaires (LDR, convertis en lumière linéaire).
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -25,9 +26,11 @@ struct SkySettings {
     std::string status;      // message pour le panneau
 };
 
-// Image chargée (lumière linéaire RGB, normalisée).
+// Image chargée (lumière linéaire RGB, normalisée). Gardée en RGB9_E5
+// (packed, 4 octets par texel) ; rgb ne sert que pendant le chargement.
 struct SkyImage {
     std::vector<float> rgb;
+    std::vector<uint32_t> packed;
     int width = 0, height = 0;
     std::string path;
 };
