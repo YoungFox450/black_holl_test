@@ -105,6 +105,31 @@ void blackHoleSection(App& app)
     ImGui::Text("Sphère de photons (1,5 rs) : %s", b);
     ImGui::Text("Dernière orbite stable (3 rs) : %s", c);
     ImGui::Text("Un tour à 3 rs : %s", d);
+
+    ImGui::SeparatorText("Modèles");
+    if (ImGui::Button("Trou noir stellaire"))
+        applyStellarBlackHole(app);
+    ImGui::SameLine();
+    if (ImGui::Button("Sagittarius A*")) {
+        applyStellarBlackHole(app);
+        app.massSolar = 4.3e6f;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Quasar"))
+        applyQuasar(app);
+    help("Quasar : trou noir de près d'un milliard de soleils au centre d'une "
+         "galaxie (comme 3C 273), qui avale plusieurs soleils de gaz par an. "
+         "Son disque, très chaud, brille plus que toute sa galaxie, et des "
+         "jets de plasma partent le long de l'axe presque à la vitesse de "
+         "la lumière.");
+    ImGui::Checkbox("Jets relativistes (J)", &app.jets);
+    help("Plasma éjecté le long de l'axe de rotation à 80 % de la vitesse de la "
+         "lumière. L'effet Doppler amplifie le jet qui vient vers nous et "
+         "éteint presque l'autre : c'est pourquoi beaucoup de quasars ne "
+         "montrent qu'un seul jet.");
+    if (app.jets)
+        ImGui::SliderFloat("Puissance des jets", &app.jetPower, 0.1f, 4.0f, "%.2f",
+                           ImGuiSliderFlags_Logarithmic);
 }
 
 void diskSection(App& app)
@@ -188,13 +213,32 @@ void starSection(App& app)
 
     // Créer une étoile à partir de sa seule masse.
     ImGui::SeparatorText("Créer une étoile");
-    static int family = 0;          // 0 = séquence principale, 1 = naine blanche
+    static int family = 0;          // 0 = séquence principale, 1 = naine blanche, 2 = étoile à neutrons
     static double msMass = 1.0;
     static double wdMass = 0.6, wdTemp = 20000.0;
+    static double nsMass = 1.4, nsPeriod = 0.5, nsField = 1.0e8, nsTilt = 40.0;
     ImGui::RadioButton("Séquence principale", &family, 0);
     ImGui::SameLine();
     ImGui::RadioButton("Naine blanche", &family, 1);
-    if (family == 0) {
+    ImGui::SameLine();
+    ImGui::RadioButton("Étoile à neutrons", &family, 2);
+    if (family == 2) {
+        bool c = sliderDouble("Masse##ns", &nsMass, 1.1, 2.3, "%.2f x Soleil");
+        c |= sliderDouble("Période", &nsPeriod, 0.0014, 20.0, "%.4g s", true);
+        c |= sliderDouble("Champ magnétique", &nsField, 1.0e4, 1.0e12, "%.2g T", true);
+        c |= sliderDouble("Inclinaison du champ", &nsTilt, 0.0, 90.0, "%.0f°");
+        if (c) {
+            app.starIndex = -1;
+            star = neutronStar(nsMass, nsPeriod, nsField, nsTilt);
+        }
+        help("Noyau effondré d'une étoile massive : 1,4 soleil dans une boule de "
+             "12 km. Le type dépend de la rotation P et du champ B :\n"
+             "- B > 4,4e9 T (champ critique quantique) : magnétar ;\n"
+             "- B / P² > 1,7e7 T/s² : pulsar, deux faisceaux qui balaient "
+             "l'espace comme un phare ;\n"
+             "- sinon : étoile à neutrons éteinte.\n"
+             "Pour comparer : un aimant de frigo fait 0,005 T.");
+    } else if (family == 0) {
         if (sliderDouble("Masse##ms", &msMass, 0.08, 100.0, "%.3g x Soleil", true))
             selectMainSequence(app, msMass);
         help("Étoile qui brûle son hydrogène, comme le Soleil. La masse suffit : "
@@ -244,6 +288,115 @@ void starSection(App& app)
          "Quasi nul pour le Soleil (la lumière va tout droit), ~0,35 pour une "
          "étoile à neutrons : on voit alors une partie de sa face cachée. "
          "1 = elle devient un trou noir.");
+
+    if (star.compact != Compact::None && star.magneticField > 0.0) {
+        ImGui::SeparatorText("Étoile à neutrons");
+        char p[32], yearLoss[32];
+        formatDuration(star.spinPeriod(), p, sizeof(p));
+        ImGui::Text("Rotation : %s (%.3g tours par seconde)", p, 1.0 / star.spinPeriod());
+        ImGui::Text("Champ magnétique : %.2g T", star.magneticField);
+        ImGui::Text("Puissance rayonnée : %.3g fois le Soleil", star.spinDownPower() / 3.828e26);
+        help("Un aimant qui tourne rayonne : L = B² R^6 w^4 (1 + sin² a) / 4c³ "
+             "(dipôle dans une magnétosphère de plasma). Cette énergie est prise "
+             "à la rotation, qui ralentit.");
+        formatDuration(star.periodDerivative() * 365.25 * 86400.0, yearLoss, sizeof(yearLoss));
+        ImGui::Text("Ralentit de %s par an", yearLoss);
+        if (star.compact == Compact::Magnetar)
+            ImGui::TextWrapped("Magnétar : la croûte craque sous la tension du champ, d'où les "
+                               "sursauts de rayons X et gamma (éclairs violets).");
+        else if (star.compact == Compact::Pulsar)
+            ImGui::TextWrapped("Pulsar : à chaque tour, un faisceau balaie la caméra (rotation "
+                               "ralentie à l'écran pour la voir).");
+    }
+}
+
+void asteroidSection(App& app)
+{
+    if (!ImGui::CollapsingHeader("Astéroïdes", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    AsteroidSystem& ast = app.asteroids;
+    const CentralBody body = centralBody(app);
+    const char* unit = app.starMode ? "R" : "rs";
+    char fmt[32];
+
+    ImGui::Checkbox("Afficher les astéroïdes", &app.showAsteroids);
+    static int material = 1;   // roche
+    const double densities[] = {1500.0, 2500.0, 7800.0};
+    ImGui::Combo("Matière", &material, "Glace et gravats\0Roche\0Fer\0");
+    ast.density = densities[material];
+    help("La densité décide de la limite de Roche : plus l'astéroïde est dense, "
+         "plus il peut s'approcher sans être disloqué par les marées.");
+
+    // Ce que le corps central fait aux astéroïdes.
+    double roche = body.rocheRadius(ast.density);
+    char rbuf[48];
+    if (roche > 1.0e4) std::snprintf(rbuf, sizeof(rbuf), "%.2g %s", roche, unit);
+    else std::snprintf(rbuf, sizeof(rbuf), "%.3g %s", roche, unit);
+    ImGui::Text("Limite de Roche : %s", rbuf);
+    help("Plus près, la différence d'attraction entre les deux côtés de "
+         "l'astéroïde dépasse sa propre gravité : il se disloque en morceaux "
+         "qui s'étalent le long de l'orbite. d = (3 M / 2 pi rho)^(1/3). Autour "
+         "d'un trou noir stellaire ou d'une étoile à neutrons, elle est "
+         "immense ; autour d'un quasar, elle est sous l'horizon : les "
+         "astéroïdes sont avalés entiers.");
+    if (!body.blackHole) {
+        // Équilibre radiatif T = T* sqrt(R / 2d) = 1500 K.
+        double melt = 0.5 * std::pow(body.temperature / 1500.0, 2.0);
+        ImGui::Text("La roche fond en dessous de : %.3g R", melt);
+        help("Chauffé par l'étoile, l'astéroïde atteint T = T* sqrt(R / 2d). "
+             "Au-delà de ~1500 K la roche se sublime : il rougeoie puis fond.");
+    } else {
+        ImGui::Text("Dernière orbite stable : 3 rs");
+        help("Potentiel de Paczynski-Wiita, -GM/(r - rs) : en dessous de 3 rs, "
+             "aucune orbite n'est stable, l'astéroïde plonge dans l'horizon.");
+    }
+
+    ImGui::SeparatorText("Ajouter un astéroïde (G)");
+    static float radius = 8.0f, speed = 1.0f, inclination = 0.0f, size = 5.0f;
+    static float azimuth = 0.0f;
+    std::snprintf(fmt, sizeof(fmt), "%%.2f %s", unit);
+    ImGui::SliderFloat("Distance##ast", &radius, 1.1f, 40.0f, fmt, ImGuiSliderFlags_Logarithmic);
+    ImGui::SliderFloat("Vitesse", &speed, 0.0f, 1.6f, "%.2f x circulaire");
+    help("1 : orbite circulaire. Moins : il tombe vers le centre sur une "
+         "ellipse (0 = chute droite). 1,41 : vitesse de libération, il "
+         "s'échappe.");
+    ImGui::SliderFloat("Inclinaison", &inclination, -90.0f, 90.0f, "%.0f°");
+    ImGui::SliderFloat("Position", &azimuth, 0.0f, 360.0f, "%.0f°");
+    ImGui::SliderFloat("Diamètre", &size, 0.1f, 100.0f, "%.1f km", ImGuiSliderFlags_Logarithmic);
+    char period[32];
+    formatDuration(body.realPeriod(std::max(double(radius), 1.05)), period, sizeof(period));
+    ImGui::Text("Période réelle de l'orbite circulaire : %s", period);
+    if (ImGui::Button("Ajouter l'astéroïde"))
+        ast.addOrbit(body, radius, speed, inclination, azimuth, size);
+
+    ImGui::SeparatorText("Champ d'astéroïdes (F)");
+    FieldSettings& f = app.field;
+    ImGui::SliderInt("Nombre", &f.count, 10, 2000);
+    ImGui::SliderFloat("Bord intérieur", &f.innerRadius, 1.1f, 40.0f, fmt, ImGuiSliderFlags_Logarithmic);
+    f.outerRadius = std::max(f.outerRadius, f.innerRadius + 0.2f);
+    ImGui::SliderFloat("Bord extérieur", &f.outerRadius, f.innerRadius + 0.2f, 50.0f, fmt,
+                       ImGuiSliderFlags_Logarithmic);
+    ImGui::SliderFloat("Épaisseur", &f.inclination, 0.0f, 30.0f, "%.1f°");
+    help("Dispersion des inclinaisons des orbites autour du plan du disque.");
+    ImGui::SliderFloat("Excentricité", &f.eccentricity, 0.0f, 0.6f, "%.2f");
+    help("Dispersion des vitesses autour de la vitesse circulaire : orbites "
+         "plus ou moins allongées.");
+    if (ImGui::Button("Ajouter le champ")) {
+        ast.addField(body, f);
+        // Recule la caméra pour voir tout le champ.
+        app.camera.targetDistance = std::clamp(std::max(app.camera.targetDistance, f.outerRadius * 1.8f),
+                                               kMinDistance, kMaxDistance);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Tout retirer (X)"))
+        ast.clear();
+
+    ImGui::SeparatorText("Bilan");
+    const AsteroidStats& st = ast.stats;
+    ImGui::Text("En orbite : %d (%d max)", int(ast.items.size()), int(kMaxAsteroids));
+    if (body.blackHole) ImGui::Text("Avalés par le trou noir : %d", st.swallowed);
+    else ImGui::Text("Écrasés sur l'étoile : %d   Fondus : %d", st.impacts, st.vaporized);
+    ImGui::Text("Disloqués par les marées : %d", st.disrupted);
+    ImGui::Text("Partis à l'infini : %d", st.ejected);
 }
 
 void cameraSection(App& app)
@@ -307,6 +460,8 @@ void helpSection()
         "E : trou noir / étoile\n"
         "N / B : étoile suivante / précédente\n"
         "I / U : étoile plus / moins massive\n"
+        "J : jets du quasar\n"
+        "F / G / X : champ d'astéroïdes / astéroïde / retirer\n"
         "F1 ou Tab : cacher ce panneau\n"
         "Échap : quitter");
 }
@@ -376,6 +531,7 @@ void uiDraw(App& app, const UiStats& stats)
                 blackHoleSection(app);
                 diskSection(app);
             }
+            asteroidSection(app);
             cameraSection(app);
             renderSection(app, stats);
             helpSection();

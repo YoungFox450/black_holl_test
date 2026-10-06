@@ -37,6 +37,7 @@ uniform float uDiskBrightness;  // multiplicateur de luminosité
 uniform int   uClumpCount;      // nombre d'amas de gaz chaud (0 à MAX_CLUMPS)
 uniform float uDoppler;         // 1 = effet Doppler relativiste, 0 = coupé
 uniform float uGravShift;       // 1 = décalage gravitationnel vers le rouge, 0 = coupé
+uniform float uJets;            // intensité des jets relativistes (0 = pas de jets)
 
 const float RS         = 1.0;   // rayon de Schwarzschild (horizon)
 const float ESCAPE_R   = 60.0;  // au-delà, le rayon est considéré libre
@@ -185,6 +186,41 @@ vec4 accretionDisk(vec3 p, vec3 rayDir)
 }
 
 // -----------------------------------------------------------------------------
+//  Jets relativistes (quasar, noyau actif de galaxie)
+//
+//  Le champ magnétique du disque, enroulé par la rotation, éjecte du plasma
+//  le long de l'axe de rotation (y) à une vitesse proche de c. On le rend en
+//  volume : à chaque pas, le rayon accumule la lumière du jet qu'il traverse.
+//  Le plasma va à β = 0,8 : le jet qui vient vers nous est amplifié par
+//  l'effet Doppler (δ³) et celui qui s'éloigne presque éteint. C'est pour
+//  cela que beaucoup de quasars ne montrent qu'un seul jet.
+//  Les "nœuds" sont des chocs internes qui remontent le jet.
+// -----------------------------------------------------------------------------
+const float JET_BETA = 0.8;
+
+vec3 jetEmission(vec3 p, vec3 rayDir)
+{
+    float ay = abs(p.y);
+    float d = length(p.xz);
+    float w = 0.25 + 0.07 * ay;                      // le jet s'ouvre lentement
+    float core = exp(-d * d / (w * w)) * smoothstep(1.5, 3.5, ay) * exp(-ay / 40.0);
+    if (core < 1e-4) return vec3(0.0);
+
+    float side = p.y > 0.0 ? 1.0 : -1.0;
+    float knots = 0.45 + 0.9 * pow(noise3(vec3(side * 7.0, ay * 0.3 - uTime * 0.02, 0.0)), 2.0);
+
+    vec3 jetDir = vec3(0.0, side, 0.0);
+    float gamma = 1.0 / sqrt(1.0 - JET_BETA * JET_BETA);
+    float cosTheta = dot(jetDir, -normalize(rayDir));
+    float delta = 1.0 / (gamma * (1.0 - JET_BETA * cosTheta));
+    float beaming = mix(1.0, delta * delta * delta, uDoppler);
+
+    // Rayonnement synchrotron : bleuté, coeur plus blanc.
+    vec3 color = mix(vec3(0.35, 0.5, 1.0), vec3(0.9, 0.95, 1.0), exp(-d * d / (0.2 * w * w)));
+    return color * core * knots * beaming * uJets * 1.2;
+}
+
+// -----------------------------------------------------------------------------
 //  Équation des géodésiques nulles (trajectoires de la lumière).
 //
 //  En Schwarzschild, la trajectoire d'un photon vérifie (équation de Binet) :
@@ -239,6 +275,7 @@ void main()
         // référence 20 fois plus fin, l'écart est invisible (PSNR 60 dB), pour
         // ~8 fois moins de pas qu'avant près de la sphère de photons.
         float dt = clamp(STEP * r, 0.02, 8.0);
+        if (uJets > 0.0) dt = min(dt, 0.3 + 0.08 * r);   // jets fins : pas plus courts
 
         // Intégration Runge-Kutta d'ordre 4.
         vec3 k1v = geodesicAccel(pos, h2);
@@ -253,6 +290,9 @@ void main()
         vec3 prev = pos;
         pos += dt / 6.0 * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
         vel += dt / 6.0 * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
+
+        if (uJets > 0.0)
+            color += (1.0 - alpha) * jetEmission(0.5 * (prev + pos), vel) * dt;
 
         // Le rayon a-t-il traversé le plan du disque pendant ce pas ?
         if (uDisk == 1 && prev.y * pos.y < 0.0) {

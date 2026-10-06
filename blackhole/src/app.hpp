@@ -3,6 +3,7 @@
 // État de l'application partagé entre la boucle principale (main.cpp) et le
 // panneau de contrôle (ui.cpp).
 
+#include "asteroids.hpp"
 #include "star.hpp"
 
 #include <algorithm>
@@ -112,7 +113,43 @@ struct App {
     bool starMode = false;
     int starIndex = 0;          // dans starPresets(), -1 = séquence principale
     Star star = starPresets()[0];
+
+    // Jets relativistes le long de l'axe du trou noir (quasar).
+    bool jets = false;
+    float jetPower = 1.0f;
+
+    // Astéroïdes autour du corps central (trou noir ou étoile).
+    AsteroidSystem asteroids;
+    FieldSettings field;
+    bool showAsteroids = true;
 };
+
+// Le corps central actuel, vu par les astéroïdes.
+inline CentralBody centralBody(const App& app)
+{
+    return app.starMode ? starBody(app.star) : blackHoleBody(app.massSolar);
+}
+
+// Temps de la scène écoulé pour dt secondes réelles : rs/c pour le trou
+// noir, secondes affichées (simTime / 10) pour une étoile.
+inline double sceneDt(const App& app, double dt)
+{
+    return dt * app.simSpeed / (app.starMode ? 10.0 : 1.0);
+}
+
+// Champ d'astéroïdes par défaut, adapté à la scène (en rs ou en rayons
+// d'étoile).
+inline FieldSettings defaultField(bool starMode)
+{
+    FieldSettings f;
+    if (starMode) {
+        // Autour du Soleil, la roche fond en dessous de ~7 rayons : le
+        // champ commence plus près pour qu'on voie les deux.
+        f.innerRadius = 4.0f;
+        f.outerRadius = 8.0f;
+    }
+    return f;
+}
 
 // Distance de caméra par défaut : en rayons de Schwarzschild pour le trou
 // noir, en rayons de l'étoile pour une étoile.
@@ -124,6 +161,9 @@ inline void setStarMode(App& app, bool on)
     if (app.starMode == on) return;
     app.starMode = on;
     app.camera.targetDistance = on ? kStarDistance : kBlackHoleDistance;
+    // Les unités changent (rs ou rayon d'étoile) : on repart de zéro.
+    app.asteroids.clear();
+    app.field = defaultField(on);
 }
 
 // Recentre la caméra (distance adaptée au trou noir ou à l'étoile).
@@ -150,4 +190,32 @@ inline void selectMainSequence(App& app, double mass)
     app.starIndex = -1;
     app.star = mainSequenceStar(mass);
     std::cout << app.star.summary() << "\n";
+}
+
+// Quasar : trou noir supermassif (~1 milliard de soleils, comme 3C 273) qui
+// avale énormément de gaz. Disque très chaud et très lumineux, jets
+// relativistes le long de l'axe.
+inline void applyQuasar(App& app)
+{
+    setStarMode(app, false);
+    app.massSolar = 8.9e8f;
+    app.disk.maxTemperature = 22000.0f;
+    app.disk.brightness = 2.8f;
+    app.disk.outerRadius = 18.0f;
+    app.disk.clumpCount = 32;
+    app.showDisk = true;
+    app.jets = true;
+    app.jetPower = 1.0f;
+    app.camera.targetDistance = 35.0f;
+    app.camera.pitch = 0.35f;
+}
+
+// Trou noir "calme" : réglages de départ.
+inline void applyStellarBlackHole(App& app)
+{
+    setStarMode(app, false);
+    app.massSolar = 10.0f;
+    app.disk = DiskSettings{};
+    app.jets = false;
+    app.camera.targetDistance = kBlackHoleDistance;
 }

@@ -12,6 +12,11 @@ constexpr double kSunRadiusKm = 695700.0;
 constexpr double kChandrasekhar = 1.44;             // M☉
 constexpr double kNeutronStarRadius = 12.0 / kSunRadiusKm;
 
+constexpr double kPi = 3.14159265358979;
+constexpr double kQedField = 4.4e9;         // T, champ critique quantique (Schwinger)
+constexpr double kDeathLine = 1.7e7;        // T/s², B / P² sous lequel un pulsar s'éteint
+constexpr double kNeutronInertia = 1.0e38;  // kg m², moment d'inertie d'une étoile à neutrons
+
 } // namespace
 
 double Star::luminosity() const
@@ -70,7 +75,67 @@ std::string Star::summary() const
     std::snprintf(buf, sizeof(buf), "%s (%s, %s) | M %.3g M☉ | R %.3g R☉ | T %.0f K | L %.3g L☉",
                   name.c_str(), kind.c_str(), spectralClass().c_str(), mass, radius, temperature,
                   luminosity());
-    return buf;
+    std::string out = buf;
+    if (compact != Compact::None && magneticField > 0.0) {
+        std::snprintf(buf, sizeof(buf), " | P %.3g s | B %.2g T", spinPeriod(), magneticField);
+        out += buf;
+    }
+    return out;
+}
+
+double Star::spinPeriod() const
+{
+    return rotationDays * 86400.0;
+}
+
+double Star::spinDownPower() const
+{
+    if (compact == Compact::None || magneticField <= 0.0) return 0.0;
+    // Dipôle magnétique tournant dans une magnétosphère remplie de plasma
+    // (Spitkovsky 2006), en unités CGS : L = B² R⁶ Ω⁴ (1 + sin² α) / (4 c³).
+    double bGauss = magneticField * 1.0e4;
+    double rCm = radius * kSunRadiusKm * 1.0e5;
+    double omega = 2.0 * kPi / std::max(spinPeriod(), 1e-4);
+    double s = std::sin(magneticTilt * kPi / 180.0);
+    double c = 2.99792458e10;
+    double ergPerS = bGauss * bGauss * std::pow(rCm, 6.0) * std::pow(omega, 4.0) * (1.0 + s * s) /
+                     (4.0 * c * c * c);
+    return ergPerS * 1.0e-7;
+}
+
+double Star::periodDerivative() const
+{
+    // L'énergie rayonnée est prise à la rotation : L = I Ω |dΩ/dt|
+    // d'où dP/dt = L P³ / (4 π² I).
+    double p = spinPeriod();
+    return spinDownPower() * p * p * p / (4.0 * kPi * kPi * kNeutronInertia);
+}
+
+Star neutronStar(double mass, double periodSeconds, double fieldTesla, double tiltDegrees)
+{
+    Star s;
+    s.mass = std::clamp(mass, 1.1, 2.3);
+    s.radius = kNeutronStarRadius;
+    s.rotationDays = std::max(periodSeconds, 1e-3) / 86400.0;
+    s.magneticField = fieldTesla;
+    s.magneticTilt = tiltDegrees;
+    s.activity = 0.0;
+    double p = s.spinPeriod();
+    if (fieldTesla >= kQedField) {
+        s.compact = Compact::Magnetar;
+        s.kind = "magnétar";
+        s.temperature = 5.0e6;      // chauffée par la désintégration du champ
+    } else if (fieldTesla / (p * p) >= kDeathLine) {
+        s.compact = Compact::Pulsar;
+        s.kind = "pulsar";
+        s.temperature = 1.0e6;
+    } else {
+        s.compact = Compact::Neutron;
+        s.kind = "étoile à neutrons éteinte";
+        s.temperature = 3.0e5;
+    }
+    s.name = "Étoile à neutrons";
+    return s;
 }
 
 Star mainSequenceStar(double mass)
@@ -137,7 +202,28 @@ const std::vector<Star>& starPresets()
         Star wd = whiteDwarf(1.02, 25000);
         wd.name = "Sirius B";
         v.push_back(wd);
-        v.push_back({"Étoile à neutrons",   "étoile à neutrons",       1.4,   kNeutronStarRadius, 1.0e6, 1e-5, 0.0});
+        Star ns{"Étoile à neutrons",   "étoile à neutrons",       1.4,   kNeutronStarRadius, 1.0e6, 1e-5, 0.0};
+        ns.compact = Compact::Neutron;
+        v.push_back(ns);
+
+        // Pulsar du Crabe : reste de la supernova de 1054, 30 tours par seconde.
+        Star crab = neutronStar(1.4, 0.0337, 3.8e8, 45.0);
+        crab.name = "Pulsar du Crabe";
+        crab.temperature = 1.6e6;
+        v.push_back(crab);
+
+        // Pulsar milliseconde, "recyclé" par l'accrétion d'une compagne :
+        // 174 tours par seconde mais champ 10 000 fois plus faible.
+        Star msp = neutronStar(1.44, 0.00576, 5.8e4, 30.0);
+        msp.name = "PSR J0437-4715";
+        msp.kind = "pulsar milliseconde";
+        msp.temperature = 1.5e5;
+        v.push_back(msp);
+
+        // Magnétar SGR 1806-20 : sursaut géant de décembre 2004.
+        Star sgr = neutronStar(1.4, 7.55, 2.0e11, 35.0);
+        sgr.name = "Magnétar SGR 1806-20";
+        v.push_back(sgr);
         return v;
     }();
     return presets;

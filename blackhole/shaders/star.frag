@@ -14,6 +14,17 @@
 //    - granulation : cellules de convection, dont la taille suit la gravite
 //    - taches stellaires (etoiles froides et actives), plus froides
 //  Les parametres viennent du modele physique (src/star.cpp).
+//
+//  Etoiles a neutrons (pulsar, magnetar) : le champ magnetique est un dipole
+//  incline de uMagTilt sur l'axe de rotation, qui tourne avec l'etoile.
+//    - pulsar   : deux faisceaux coniques le long de l'axe magnetique. Le
+//                 rayon les traverse et accumule leur lumiere (rendu
+//                 volumique) : quand un faisceau passe face a la camera, on
+//                 voit l'eclair, c'est l'impulsion du pulsar ;
+//    - magnetar : lignes de champ du dipole, r = L sin^2(theta), tordues par
+//                 les courants de la magnetosphere, et sursauts aleatoires ;
+//    - les deux : calottes polaires chauffees par les particules qui
+//                 retombent le long des lignes de champ.
 // =============================================================================
 
 out vec4 FragColor;
@@ -34,6 +45,12 @@ uniform float uLimb;        // coefficient d'assombrissement centre-bord u
 uniform float uGranScale;   // cellules de convection par rayon
 uniform float uActivity;    // 0 a 1 : taches stellaires
 uniform float uRotSpeed;    // vitesse de rotation affichee (rad/s)
+
+uniform float uMagTilt;     // angle axe magnetique / axe de rotation (radians)
+uniform float uBeam;        // intensite des faisceaux du pulsar (0 = aucun)
+uniform float uField;       // visibilite des lignes de champ (0 a 1)
+uniform float uBursts;      // 1 = sursauts de magnetar
+uniform float uCaps;        // 1 = calottes polaires chaudes
 
 const float ESCAPE_R = 80.0;
 const float STEP     = 0.2;
@@ -68,6 +85,69 @@ vec3 rotateY(vec3 p, float a)
     return vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z);
 }
 
+// Axe magnetique dans le repere de l'etoile (fixe) et dans le repere du monde.
+vec3 magAxisBody()
+{
+    return vec3(sin(uMagTilt), cos(uMagTilt), 0.0);
+}
+
+vec3 magAxisWorld()
+{
+    return rotateY(magAxisBody(), uTime * uRotSpeed);
+}
+
+// Intensite des sursauts du magnetar a l'instant t : la plupart du temps
+// nulle, parfois un pic bref (la croute craque sous la tension du champ).
+float burstLevel()
+{
+    float n = noise3(vec3(uTime * 0.6, 1.7, 3.1));
+    return uBursts * smoothstep(0.68, 0.9, n) * 5.0;
+}
+
+// Faisceaux du pulsar au point p : cone autour de l'axe magnetique, de plus
+// en plus large en s'eloignant (ouverture ~10 degres).
+vec3 pulsarBeams(vec3 p, vec3 axis)
+{
+    float s = dot(p, axis);
+    float as = abs(s);
+    float d = length(p - s * axis);
+    float w = 0.08 + 0.17 * as;
+    float core = exp(-d * d / (w * w)) * smoothstep(1.0, 1.8, as) / (1.0 + 0.12 * as);
+    float flicker = 0.8 + 0.2 * sin(as * 1.3 - uTime * 9.0 + sign(s));
+    return vec3(0.55, 0.72, 1.0) * core * flicker * uBeam * 0.9;
+}
+
+// Lignes de champ du dipole au point p (repere du monde) : 3 coquilles
+// L = 1,5 ; 2,4 ; 3,8 rayons, 6 lignes chacune, tordues autour de l'axe.
+vec3 fieldLines(vec3 p, float burst)
+{
+    float r = length(p);
+    if (r < 1.0 || r > 7.0) return vec3(0.0);
+    vec3 q = rotateY(p, -uTime * uRotSpeed);        // repere de l'etoile
+    vec3 m = magAxisBody();
+    vec3 e1 = vec3(cos(uMagTilt), -sin(uMagTilt), 0.0);
+    vec3 e2 = vec3(0.0, 0.0, 1.0);
+    float cosT = dot(q, m) / r;
+    float sin2 = max(1.0 - cosT * cosT, 1e-4);
+
+    // Coquille la plus proche : L_k = 1,5 x 1,6^k.
+    float k = clamp(floor(log(r / sin2 / 1.5) / log(1.6) + 0.5), 0.0, 2.0);
+    float lk = 1.5 * pow(1.6, k);
+    float dr = r - lk * sin2;
+
+    // Ligne la plus proche en azimut, avec une torsion qui grandit vers
+    // l'equateur magnetique (courants de la magnetosphere).
+    float phi = atan(dot(q, e2), dot(q, e1)) + 0.6 * uField * cosT;
+    float n = 6.0;
+    float dphi = (fract(phi * n / 6.2831853 + 0.5) - 0.5) * 6.2831853 / n;
+    float daz = r * sqrt(sin2) * dphi;
+
+    float w = 0.07 + 0.03 * r;
+    float tube = exp(-(dr * dr + daz * daz) / (w * w));
+    float fade = exp(-(r - 1.0) * 0.35);
+    return vec3(0.75, 0.45, 1.0) * tube * fade * uField * (1.0 + burst) * 1.6;
+}
+
 // Lumiere emise par la surface au point n (|n| = 1), vue sous l'angle mu.
 vec3 surface(vec3 n, float mu)
 {
@@ -92,8 +172,12 @@ vec3 surface(vec3 n, float mu)
     float g = sqrt(max(1.0 - uCompact, 0.05));
     float T = uStarTemp * g * (1.0 - 0.3 * spot) * mix(1.0, gran, 0.5);
 
+    // Calottes polaires des etoiles a neutrons.
+    float cap = uCaps * smoothstep(0.9, 0.985, abs(dot(q, magAxisBody())));
+    T *= 1.0 + 0.8 * cap;
+
     float limb = 1.0 - uLimb * (1.0 - mu);
-    float intensity = limb * gran * (1.0 - 0.75 * spot);
+    float intensity = limb * gran * (1.0 - 0.75 * spot) * (1.0 + 2.5 * cap);
     return blackbody(T) * intensity * EXPOSURE;
 }
 
@@ -112,8 +196,12 @@ void main()
     float h2 = dot(c, c);
 
     vec3 color = vec3(0.0);
+    vec3 glowSum = vec3(0.0);        // lumiere des faisceaux et lignes de champ
     bool hit = false;
     float rMin = length(pos);
+    vec3 axis = magAxisWorld();
+    bool volumetric = uBeam > 0.0 || uField > 0.0;
+    float burst = burstLevel();      // meme valeur pour tout le pixel
 
     for (int i = 0; i < uMaxSteps; ++i) {
         float r = length(pos);
@@ -121,6 +209,11 @@ void main()
         if (r > ESCAPE_R && radial > 0.0) break;
 
         float dt = clamp(STEP * r, 0.01, 8.0);
+        // Faisceaux et lignes de champ sont fins : pas plus courts autour.
+        if (volumetric) {
+            dt = min(dt, 0.15 + 0.08 * r);
+            if (uField > 0.0 && r < 7.5) dt = min(dt, 0.2);
+        }
         vec3 k1v = geodesicAccel(pos, h2);
         vec3 k1x = vel;
         vec3 k2v = geodesicAccel(pos + 0.5 * dt * k1x, h2);
@@ -133,6 +226,12 @@ void main()
         vec3 prev = pos;
         pos += dt / 6.0 * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
         vel += dt / 6.0 * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
+
+        if (volumetric) {
+            vec3 mid = 0.5 * (prev + pos);
+            if (dot(mid, mid) > 1.0)
+                glowSum += (pulsarBeams(mid, axis) + fieldLines(mid, burst)) * dt;
+        }
 
         // Le pas a-t-il traverse la surface ? Le segment est presque droit :
         // on resout |prev + t (pos - prev)| = 1 pour trouver le point d'impact.
@@ -161,7 +260,10 @@ void main()
         vec3 tint = blackbody(uStarTemp);
         vec3 glow = tint * (0.6 * exp(-above * 10.0) + 0.1 * exp(-above * 1.8)) * EXPOSURE;
         color = glow + sky * 0.6;
+        // Sursaut de magnetar : tout l'environnement s'illumine un instant.
+        color += vec3(0.7, 0.5, 1.0) * burst * 0.08 * exp(-above * 0.8);
     }
+    color += glowSum * EXPOSURE;
 
     FragColor = vec4(color, 1.0);
 }
