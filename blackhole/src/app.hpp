@@ -5,6 +5,7 @@
 
 #include "activity.hpp"
 #include "asteroids.hpp"
+#include "corona.hpp"
 #include "binary.hpp"
 #include "star.hpp"
 
@@ -120,6 +121,11 @@ struct App {
     // Activité de l'étoile (src/activity.cpp) : éruptions en cours et
     // décalage de phase du cycle magnétique (réglable dans le panneau).
     FlareSimulator flares;
+    // Protubérances, éjections de masse coronale et couronne (src/corona.cpp).
+    CoronaSimulator corona;
+    bool showCorona = true;
+    bool showProminences = true;
+    bool showCmes = true;
     double cyclePhaseOffset = 0.4;  // 0,4 : près du maximum du cycle
 
     // Jets relativistes le long de l'axe du trou noir (quasar).
@@ -162,6 +168,19 @@ inline const char* onOff(bool v) { return v ? "oui" : "non"; }
 inline double starDays(const App& app)
 {
     return app.simTime / 10.0 * kStarDaysPerSecond;
+}
+
+// Vitesse de rotation affichée de l'étoile (rad/jour), bornée pour les
+// objets qui tournent très vite (sinon la rotation crénelle à l'écran).
+inline double displayOmega(const Star& star)
+{
+    return std::min(6.283185307 / std::max(star.rotationDays, 1e-9), 1.5);
+}
+
+// Angle de rotation affiché de l'équateur au temps `days`.
+inline double starRotationAngle(const Star& star, double days)
+{
+    return std::fmod(displayOmega(star) * days, 6.283185307179586);
 }
 
 // Phase (0..1) du cycle magnétique de l'étoile.
@@ -233,6 +252,7 @@ inline void selectPreset(App& app, int index)
     app.starIndex = ((index % n) + n) % n;
     app.star = presets[app.starIndex];
     app.flares.clear();
+    app.corona.clear();
     std::cout << app.star.summary() << "\n";
 }
 
@@ -241,6 +261,7 @@ inline void selectMainSequence(App& app, double mass)
     app.starIndex = -1;
     app.star = mainSequenceStar(mass);
     app.flares.clear();
+    app.corona.clear();
     std::cout << app.star.summary() << "\n";
 }
 

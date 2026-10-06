@@ -44,6 +44,10 @@ finit, le pixel prend la couleur :
   cycle magnétique et loi de Spörer, rotation différentielle, éruptions,
   oscillations de luminosité. Les étoiles qui tournent vite sont les plus
   actives (nombre de Rossby).
+- **Couronne, protubérances et éjections de masse coronale** : couronne
+  chaude et ses jets, protubérances roses au bord et filaments sombres sur
+  le disque, nuages en corotation des étoiles rapides, éjections (touche
+  `M`) et vent stellaire, tous déduits de l'activité.
   Les étoiles peu compactes sont tracées en ligne droite (la déviation y est
   inférieure à 0,1°), ce qui les rend environ 2,5 fois plus rapides.
 - **Panneau de contrôle** (Dear ImGui, police Inter, `F1` ou `Tab`) : lecture
@@ -147,6 +151,7 @@ Le détail par système (paquets Linux, macOS) est dans
 | `E` | passer du trou noir à une étoile, et retour |
 | `N` / `B` | étoile suivante / précédente |
 | `J` | jets relativistes (quasar) |
+| `M` | éjection de masse coronale (étoile active) |
 | `V` | lentille gravitationnelle (marche / arrêt) |
 | `F` / `G` / `X` | champ d'astéroïdes, un astéroïde, tout retirer |
 | `K` / `L` / `O` | baisser, augmenter la résolution, ou la laisser automatique |

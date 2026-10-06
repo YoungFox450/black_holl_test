@@ -18,6 +18,18 @@
 //    - oscillations de luminosite (geantes rouges)
 //  Les parametres viennent du modele physique (src/star.cpp, src/activity.cpp).
 //
+//  Autour des etoiles a dynamo (src/corona.cpp), calcule sans pas
+//  d'integration (rayons droits) :
+//    - couronne : lumiere de la photosphere diffusee par les electrons
+//      (couronne K), densite en r^-4 donc colonne en b^-3 (b : distance du
+//      rayon au centre), jets coronaux pres de l'equateur au minimum du
+//      cycle, structures radiales ;
+//    - protuberances : rideaux de gaz froid dans un plan vertical, arches
+//      au-dessus des regions actives, nuages en corotation. Roses (raie
+//      H-alpha) au bord, filaments sombres devant le disque ;
+//    - ejections de masse coronale : coquille brillante qui s'etend,
+//      cavite sombre, coeur rose (la protuberance qui a eclate).
+//
 //  Etoiles a neutrons (pulsar, magnetar) : le champ magnetique est un dipole
 //  incline de uMagTilt sur l'axe de rotation, qui tourne avec l'etoile.
 //    - pulsar   : deux faisceaux coniques le long de l'axe magnetique. Le
@@ -75,6 +87,21 @@ const float FLARE_TEMP = 9000.0;
 // k = 0 ; 0,5 ; ... ; 4 (mesures, voir kSpotNoiseQuantiles dans activity.hpp).
 const float SPOT_Q[9] = float[9](0.0826, 0.4808, 0.5599, 0.6222, 0.6624,
                                  0.6875, 0.7012, 0.7118, 0.7226);
+
+// Couronne, protuberances, ejections (src/corona.cpp, repere du monde).
+const int MAX_PROMS = 6;
+const int MAX_CMES = 3;
+uniform float uCorona;          // intensite de la couronne (0 = aucune)
+uniform float uStreamers;       // 1 = minimum du cycle (jets coronaux equatoriaux)
+uniform vec3  uCoronaTint;      // couleur de la couronne (lumiere de l'etoile diffusee)
+uniform int   uPromCount;
+uniform vec4  uPromA[MAX_PROMS]; // milieu au pied (unitaire), demi-longueur (rad ou taille)
+uniform vec4  uPromB[MAX_PROMS]; // direction le long de la protuberance, hauteur
+uniform vec4  uPromC[MAX_PROMS]; // type (0 rideau, 1 arche, 2 nuage), graine, eclat, decollage (0..1)
+uniform int   uCmeCount;
+uniform vec4  uCmeA[MAX_CMES];   // direction, distance parcourue par le front
+uniform vec4  uCmeB[MAX_CMES];   // eclat, graine
+const vec3 HALPHA = vec3(1.0, 0.2, 0.28);   // raie H-alpha (656 nm) + un peu de bleu (He, Ca)
 
 uniform float uMagTilt;     // angle axe magnetique / axe de rotation (radians)
 uniform float uBeam;        // intensite des faisceaux du pulsar (0 = aucun)
@@ -264,6 +291,145 @@ vec3 surface(vec3 n, float mu)
     return color * EXPOSURE;
 }
 
+// Couronne vue a cote de l'etoile : b = distance du rayon au centre,
+// m = direction du point le plus proche (repere du monde).
+vec3 coronaLight(float b, vec3 m)
+{
+    if (uCorona <= 0.0 || b <= 1.0 || b > 7.0) return vec3(0.0);
+    vec3 q = rotateY(m, -uRotation);
+    // Jets coronaux : au minimum du cycle, de longs "casques" pres de
+    // l'equateur ; au maximum, une couronne ronde, herissee partout.
+    // (q.y = sinus de la latitude ; ~ latitude pres de l'equateur.)
+    float belt = exp(-q.y * q.y / 0.12);
+    float n = noise3(q * 7.0);
+    float rays = 0.45 + 0.9 * n * n;
+    float shape = mix(1.0, 0.25 + 1.6 * belt, uStreamers) * rays;
+    float reach = 1.0 + 1.5 * (b - 1.0) * mix(0.3, belt, uStreamers);   // les jets portent plus loin
+    float col = shape * reach / (b * b * b);
+    return uCoronaTint * col * uCorona * 0.35;
+}
+
+// Protuberances et ejections le long d'un rayon droit (pos + t dir).
+// tHit : distance a la surface (hit = le rayon touche l'etoile). Renvoie
+// la lumiere emise ; trans : fraction de la lumiere de la surface qui
+// traverse les filaments ; cover : quantite de gaz froid au bord (il
+// cache la lueur blanche autour de l'etoile).
+vec3 activityLight(vec3 pos, vec3 dir, bool hit, float tHit, out float trans, out float cover)
+{
+    vec3 light = vec3(0.0);
+    trans = 1.0;
+    cover = 0.0;
+    for (int i = 0; i < MAX_PROMS; ++i) {
+        if (i >= uPromCount) break;
+        vec3 c = uPromA[i].xyz;
+        vec3 tg = uPromB[i].xyz;
+        float h = uPromB[i].w;
+        float type = uPromC[i].x;
+        float seed = uPromC[i].y;
+        float fade = uPromC[i].z;
+        float col = 0.0;
+        float t = 0.0;
+        // Rejet rapide : sphere qui englobe la protuberance.
+        float ext = type > 1.5 ? h : 0.5 * h;
+        float rad = type > 1.5 ? 2.5 * uPromA[i].w : max(uPromA[i].w, 0.6 * h) + 0.6 * h;
+        vec3 bc = c * (1.0 + ext);
+        vec3 bo = pos + dot(bc - pos, dir) * dir - bc;
+        if (dot(bo, bo) > rad * rad) continue;
+        if (type > 1.5) {
+            // Nuage en corotation : boule floue au-dessus de la surface.
+            vec3 center = c * (1.0 + h);
+            t = dot(center - pos, dir);
+            vec3 d = pos + t * dir - center;
+            float w = uPromA[i].w;
+            col = exp(-dot(d, d) / (w * w)) * (0.7 + 0.8 * noise3(d * 6.0 / w + seed)) * 1.2;
+        } else {
+            // Rideau ou arche dans le plan vertical (c, tg).
+            vec3 n = cross(c, tg);
+            float dn = dot(dir, n);
+            if (abs(dn) < 1e-4) continue;
+            t = -dot(pos, n) / dn;
+            vec3 q = pos + t * dir;
+            float x = dot(q, c);
+            if (t <= 0.0 || x <= 0.0) continue;
+            float u = atan(dot(q, tg), x) / uPromA[i].w;     // -1..1 le long
+            float z = length(q) - 1.0;                        // altitude
+            if (abs(u) >= 1.0 || z <= 0.0) continue;
+            float edge = 1.0 / max(abs(dn), 0.15);            // vu par la tranche : plus epais
+            if (z > 1.25 * h) continue;
+            if (type < 0.5) {
+                // Rideau : sommet irregulier, fils de gaz verticaux.
+                float top = h * (1.0 - u * u * u * u) * (0.7 + 0.5 * noise3(vec3(u * 2.5, seed, 0.0)));
+                float body = 1.0 - smoothstep(0.75 * top, top, z);
+                // Eruption : le bas se detache, il ne reste qu'une arche qui monte.
+                float base = 0.6 * uPromC[i].w * top;
+                body *= smoothstep(base - 0.01, base + 0.01, z);
+                float threads = 0.45 + 0.75 * noise3(vec3(u * uPromA[i].w * 70.0, z * 10.0, seed));
+                col = body * threads * edge * 1.0;
+            } else {
+                // Arche : boucle de champ magnetique remplie de plasma.
+                float arc = h * sqrt(max(1.0 - u * u, 0.0));
+                float w = 0.006 + 0.12 * h;
+                float dz = (z - arc) / w;
+                float strands = 0.5 + 0.8 * noise3(vec3(u * 9.0, dz * 2.0, seed));
+                col = exp(-dz * dz) * strands * edge * 1.2;
+            }
+        }
+        col *= fade;
+        if (col <= 0.0 || t <= 0.0) continue;
+        if (hit && t > tHit) continue;                        // derriere l'etoile
+        if (hit) trans *= 1.0 - clamp(0.55 * col, 0.0, 0.8); // filament sombre sur le disque
+        else { light += HALPHA * col; cover += col; }
+    }
+
+    for (int i = 0; i < MAX_CMES; ++i) {
+        if (i >= uCmeCount) break;
+        vec3 d0 = uCmeA[i].xyz;
+        float front = uCmeA[i].w;
+        float bright = uCmeB[i].x;
+        float seed = uCmeB[i].y;
+        // Bulle qui grandit en s'eloignant : rayon = moitie du chemin parcouru.
+        float rb = 0.5 * front;
+        vec3 center = d0 * (1.0 + 0.5 * front);
+        float tc = dot(center - pos, dir);
+        vec3 off = pos + tc * dir - center;
+        float d2 = dot(off, off);
+        float outer = 1.1 * rb;
+        if (d2 > outer * outer) continue;
+        // Quelques echantillons a travers la bulle (seulement les pixels
+        // qui la traversent) : coquille de plasma, plus dense vers l'avant,
+        // dechiree en filaments ; coeur rose en bas.
+        float half_ = sqrt(outer * outer - d2);
+        float t0 = tc - half_, t1 = tc + half_;
+        if (hit) t1 = min(t1, tHit);
+        t0 = max(t0, 0.0);
+        if (t1 <= t0) continue;
+        const int N = 6;
+        float dt = (t1 - t0) / float(N);
+        float shell = 0.0, core = 0.0;
+        for (int k = 0; k < N; ++k) {
+            vec3 p = pos + (t0 + (float(k) + 0.5) * dt) * dir;
+            vec3 rel = p - center;
+            float dd = length(rel) / rb;
+            float m = dot(rel, d0) / (dd * rb + 1e-4);
+            float layer = (dd - 0.9) / 0.1;
+            float ws = exp(-layer * layer) * smoothstep(-0.4, 0.6, m);
+            vec3 rc = rel + d0 * 0.4 * rb;
+            float wc = exp(-dot(rc, rc) / (0.05 * rb * rb));
+            // Ni coquille ni coeur ici (l'interieur de la bulle est vide) :
+            // on saute le bruit, la partie chere de l'echantillon.
+            if (ws + wc < 0.01) continue;
+            float rough = noise3(rel * (4.0 / rb) + seed);
+            shell += ws * (0.15 + 1.6 * rough * rough * rough);
+            core += wc * (0.3 + rough);
+        }
+        float norm = dt / rb;
+        vec3 l = (uCoronaTint * shell * 0.35 * 10.0 / 6.0 + HALPHA * core * 0.6) * norm * bright;
+        if (hit) trans *= 1.0 - clamp(0.3 * bright * (shell + core) * norm, 0.0, 0.35);
+        else light += l;
+    }
+    return light;
+}
+
 void main()
 {
     vec2 ndc = (gl_FragCoord.xy / uResolution) * 2.0 - 1.0;
@@ -290,6 +456,7 @@ void main()
     // est deviee de moins de 0,1 degre, invisible a l'ecran. On remplace
     // l'integration pas a pas par l'intersection exacte droite / sphere.
     bool straight = uCompact * uLensing < 1.0e-3;
+    float tHit = 0.0;
     if (straight) {
         float b = dot(pos, dir);
         float cc = dot(pos, pos) - 1.0;
@@ -300,7 +467,17 @@ void main()
             vec3 p = normalize(pos + t * dir);
             color = surface(p, clamp(dot(p, -dir), 0.0, 1.0));
             hit = true;
+            tHit = t;
         }
+    }
+    // Couronne, protuberances, ejections (seulement pour les etoiles a
+    // dynamo, toutes tracees en ligne droite).
+    vec3 activity = vec3(0.0);
+    float cover = 0.0;
+    if (straight && (uPromCount > 0 || uCmeCount > 0)) {
+        float trans;
+        activity = activityLight(pos, dir, hit, tHit, trans, cover);
+        color *= trans;
     }
 
     for (int i = 0; i < (straight ? 0 : uMaxSteps); ++i) {
@@ -359,11 +536,16 @@ void main()
         float above = max(rMin - 1.0, 0.0);
         vec3 tint = blackbody(uStarTemp);
         vec3 glow = tint * (0.6 * exp(-above * 10.0) + 0.1 * exp(-above * 1.8)) * EXPOSURE;
+        glow /= 1.0 + 3.0 * cover;   // une protuberance devant la lueur la cache
         color = glow + sky * 0.6;
+        if (straight) {
+            vec3 closest = pos - dot(pos, dir) * dir;
+            color += coronaLight(rMin, normalize(closest + vec3(0.0, 1e-5, 0.0))) * EXPOSURE;
+        }
         // Sursaut de magnetar : tout l'environnement s'illumine un instant.
         color += vec3(0.7, 0.5, 1.0) * burst * 0.08 * exp(-above * 0.8);
     }
-    color += glowSum * EXPOSURE;
+    color += (glowSum + activity) * EXPOSURE;
 
     FragColor = vec4(color, 1.0);
 }

@@ -188,6 +188,38 @@ donne 36 ans : les naines M entièrement convectives ne suivent pas la
 relation des étoiles de type solaire), et les supergéantes chaudes comme
 Rigel ont des pulsations propres non modélisées.
 
+### Couronne, protubérances, éjections et vent
+
+Calculés dans `src/corona.cpp` à partir de l'activité (rayons X, taches,
+cycle, rotation), dessinés sans pas d'intégration dans `shaders/star.frag`.
+Panneau : cartes « Couronne et vent » et « Protubérances et éjections ».
+Touche `M` : une protubérance éclate et lance une éjection de masse coronale.
+
+![Couronne et éjection](docs/couronne.jpg)
+
+*Le Soleil : couronne avec ses jets, une éjection de masse coronale (front
+brillant, cavité, cœur rose) et une petite protubérance au bord.*
+
+| Effet | Modèle |
+|---|---|
+| Couronne | flux X `F_X = (L_X/L_bol) σT⁴`, température `T = 0,11 F_X^0,26` MK (Johnstone & Güdel 2015) : 1,7 MK pour le Soleil, ~10 MK pour une naine très active ; lumière de l'étoile diffusée par les électrons (densité en r⁻⁴) ; jets coronaux équatoriaux au minimum du cycle, couronne ronde au maximum. Renforcée pour être visible (en vrai un millionième de la surface) |
+| Ligne de partage coronale | les géantes plus froides que ~K3 (Bételgeuse, Aldébaran) n'ont pas de couronne chaude (Linsky & Haisch 1979) |
+| Vent | naines : vent de Parker isotherme, `Ṁ ∝ R² F_X^1,34` (Wood 2005), réduit au-delà de F_X = 10⁶ ; géantes froides : loi de Reimers `Ṁ = 2·10⁻¹³ L R / M` ; étoiles chaudes : vent poussé par la lumière, `v∞ = 2,6 v_esc` (Lamers 1995) |
+| Protubérances | de 1 à 6 selon l'aire tachée ; rideaux calmes (hauts, longs, des semaines), arches actives au-dessus des taches (quelques jours), « couronne polaire » ; roses au bord (raie Hα), filaments sombres devant le disque |
+| Nuages en corotation | si le rayon de corotation `(G M P² / 4π²)^1/3` est à moins de 6 rayons (rotateurs rapides comme AB Doradus), nuages froids piégés qui tournent avec l'étoile puis sont éjectés (Collier Cameron & Robinson 1989) |
+| Éjections de masse coronale | ~2,5 par jour pour le Soleil (Yashiro 2004), ∝ F_X^0,7 ; 60 % viennent d'une protubérance qui éclate (« disparition brusque ») ; structure en 3 parties ; vitesses log-normales, médiane ~450 km/s ; une partie retombe sur les étoiles très actives (confinement, Alvarado-Gómez 2018) |
+
+| Étoile | Couronne | Vent | Perte de masse | CME / jour |
+|---|---|---|---|---|
+| Soleil | 1,7 MK | 600 km/s (Parker) | 2·10⁻¹⁴ M☉/an | 2,5 |
+| Proxima du Centaure | 1,9 MK | 820 km/s | 10⁻¹⁵ M☉/an | 0,09 |
+| AB Dor (P = 0,51 j) | 9,9 MK | 1 700 km/s | 10⁻¹³ M☉/an | 226 (25 % s'échappent) |
+| Bételgeuse | aucune | 18 km/s (Reimers) | 8·10⁻⁷ M☉/an | — |
+| Rigel | aucune | 830 km/s (lumière) | 10⁻⁶ M☉/an | — |
+
+Échelle de temps : une éjection met des heures à quitter l'étoile, ici
+quelques secondes ; au plus une est montrée toutes les 8 s affichées.
+
 ## Système double
 
 Une étoile compagne tourne autour du trou noir et le trou noir lui arrache
@@ -327,6 +359,7 @@ Les lettres marchent en AZERTY comme en QWERTY.
 | `N` / `B` | étoile suivante / précédente de la liste |
 | `I` / `U` | étoile de la séquence principale plus / moins massive (×1,25) |
 | `J` | jets relativistes du trou noir (quasar) |
+| `M` | éjection de masse coronale (étoile active) |
 | `V` | lentille gravitationnelle (la couper : la lumière va tout droit) |
 | `F` | ajouter un champ d'astéroïdes (réglages du panneau) |
 | `G` | ajouter un astéroïde en orbite circulaire |
@@ -346,6 +379,7 @@ Options :
 | `--sky N` | taille d'une face du ciel (1024 ; 512 si la mémoire manque) |
 | `--bench N` | rend N images hors écran et affiche le temps moyen |
 | `--star N` | démarre sur l'étoile n° N (0 Soleil, 1 Proxima, 2 Sirius A, 3 Rigel, 4 Bételgeuse, 5 Aldébaran, 6 Sirius B, 7 étoile à neutrons, 8 pulsar du Crabe, 9 pulsar milliseconde PSR J0437-4715, 10 magnétar SGR 1806-20) |
+| `--rotation D` | période de rotation de l'étoile en jours (après `--star` ou `--mass`) |
 | `--mass M` | démarre sur une étoile de la séquence principale de M masses solaires |
 | `--quasar` | trou noir supermassif, disque très chaud et jets relativistes |
 | `--binary` | système double : étoile compagne dont le gaz est arraché |
