@@ -110,6 +110,38 @@ Unités : `G = c = 1`, et le rayon de Schwarzschild `rs = 2GM/c² = 1`.
      donc un amas brille fort quand il arrive vers nous et s'éteint en
      repartant.
 
+## Simuler des étoiles
+
+La touche `E` remplace le trou noir par une étoile, rendue par le même ray
+tracer (`shaders/star.frag`). Chaque étoile est définie par sa masse, son
+rayon et sa température ; tout le reste est calculé par des lois physiques
+dans `src/star.cpp` :
+
+![Étoiles](docs/etoiles.jpg)
+
+*De gauche à droite et de haut en bas : Soleil, Proxima du Centaure,
+Sirius A, Rigel, Bételgeuse, Aldébaran, Sirius B (naine blanche), étoile à
+neutrons, naine rouge de 0,3 M☉ (calculée à partir de sa seule masse).*
+
+| Grandeur | Modèle |
+|---|---|
+| Luminosité | Stefan-Boltzmann : `L = R² (T / 5772 K)⁴` (en L☉) |
+| Séquence principale | relation masse-luminosité `L ∝ M^2,3 … M^4 … M^3,5` et masse-rayon `R ∝ M^0,8` (M < 1) ou `M^0,57` ; T déduite de L et R |
+| Naine blanche | relation masse-rayon de Nauenberg (électrons dégénérés) : plus lourde = plus petite |
+| Couleur | corps noir à la température effective |
+| Bord plus sombre | assombrissement centre-bord `I(μ) = 1 − u (1 − μ)`, u plus fort pour les étoiles froides |
+| Granulation | cellules de convection, taille ∝ échelle de hauteur `T / g` : quelques cellules géantes sur Bételgeuse, d'innombrables sur une naine |
+| Taches | sur les étoiles froides et actives, plus froides que la surface |
+| Relativité | rayons courbés par la gravité avec `rs / R = 2GM / (c² R)` : invisible pour le Soleil, très net pour l'étoile à neutrons (on voit une partie de son arrière), plus le décalage gravitationnel vers le rouge |
+
+Les distances de la caméra sont en rayons de l'étoile : toutes les étoiles
+apparaissent à la même taille, le titre de la fenêtre donne leurs vraies
+masse, rayon, température, luminosité et type spectral.
+
+Pour ajouter une étoile, il suffit d'ajouter une ligne dans
+`starPresets()` (`src/star.cpp`), ou d'utiliser `mainSequenceStar(masse)` /
+`whiteDwarf(masse, température)`.
+
 ## Installer les outils
 
 - **VS Code** avec les extensions recommandées (VS Code les propose à
@@ -141,6 +173,36 @@ cmake --build build --config Release
 ./build/bin/blackhole
 ```
 
+## Panneau de contrôle
+
+Un panneau (Dear ImGui) s'affiche en haut à gauche ; `F1` ou `Tab` le cache.
+Il règle sans raccourci clavier :
+
+![panneau de contrôle](docs/panneau.jpg)
+![panneau en mode étoile](docs/panneau-etoile.jpg)
+
+
+- **Simulation** : pause, vitesse du temps, retour à t = 0.
+- **Trou noir** : masse en masses solaires. L'image ne change pas (tout est
+  calculé en rs), mais le panneau convertit en vraies grandeurs : taille de
+  l'horizon, de la sphère de photons, de la dernière orbite stable, durée
+  d'un tour, temps écoulé.
+- **Disque d'accrétion** : rayons intérieur et extérieur, température
+  maximale, luminosité, nombre d'amas chauds, et on peut couper l'effet
+  Doppler ou le décalage gravitationnel pour voir leur rôle.
+- **Scène** : trou noir ou étoile (`E`).
+- **Étoile** : choix d'une étoile connue (Soleil, Proxima du Centaure,
+  Sirius A et B, Rigel, Bételgeuse, Aldébaran, étoile à neutrons), création
+  d'une étoile de la séquence principale ou d'une naine blanche à partir de
+  sa masse, réglage libre de la masse, du rayon, de la température, de la
+  rotation et de l'activité. Le panneau affiche ce que la physique en déduit :
+  couleur, type et classe spectrale, luminosité, gravité, compacité rs/R.
+- **Caméra** : distance, angles, champ de vision, orbite automatique.
+- **Rendu** : FPS et temps GPU, résolution (auto ou fixe), FPS visé, pas
+  max par rayon, exposition, rechargement des shaders.
+
+Quand la souris est sur le panneau, elle ne fait pas tourner la caméra.
+
 ## Commandes
 
 Les lettres marchent en AZERTY comme en QWERTY.
@@ -158,6 +220,10 @@ Les lettres marchent en AZERTY comme en QWERTY.
 | `K` / `L` | baisser / augmenter la résolution du rendu (passe en mode fixe) |
 | `O` | résolution automatique (activée au démarrage) |
 | `R` | recharger les shaders (modifier `blackhole.frag`, sauvegarder, `R`) |
+| `E` | passer du trou noir à une étoile, et retour |
+| `N` / `B` | étoile suivante / précédente de la liste |
+| `I` / `U` | étoile de la séquence principale plus / moins massive (×1,25) |
+| `F1` ou `Tab` | afficher / cacher le panneau de contrôle |
 | `Échap` | quitter |
 
 La barre de titre affiche les FPS, la résolution du rendu, la vitesse du
@@ -171,6 +237,8 @@ Options :
 | `--scale S` | résolution fixe, fraction de la fenêtre (0.25 à 1) |
 | `--sky N` | taille d'une face du ciel (1024 ; 512 si la mémoire manque) |
 | `--bench N` | rend N images hors écran et affiche le temps moyen |
+| `--star N` | démarre sur l'étoile n° N (0 Soleil, 1 Proxima, 2 Sirius A, 3 Rigel, 4 Bételgeuse, 5 Aldébaran, 6 Sirius B, 7 étoile à neutrons) |
+| `--mass M` | démarre sur une étoile de la séquence principale de M masses solaires |
 
 Image fixe sans fenêtre (pleine résolution) :
 `blackhole --screenshot rendu.ppm --width 1920 --height 1080 [--no-disk] [--time T] [--yaw A] [--pitch A] [--distance D]`

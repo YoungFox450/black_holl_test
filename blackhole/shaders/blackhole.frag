@@ -29,9 +29,16 @@ uniform int   uDisk;      // 1 = disque d'accrétion visible
 uniform int   uMaxSteps;  // nombre max de pas d'intégration par rayon
 uniform samplerCube uSky; // fond de galaxie précalculé (voir sky.frag)
 
+// Réglages du disque d'accrétion (panneau de contrôle, voir src/ui.cpp).
+uniform float uDiskIn;          // rayon intérieur (3 rs = ISCO)
+uniform float uDiskOut;         // rayon extérieur
+uniform float uDiskTemp;        // température maximale du gaz (K)
+uniform float uDiskBrightness;  // multiplicateur de luminosité
+uniform int   uClumpCount;      // nombre d'amas de gaz chaud (0 à MAX_CLUMPS)
+uniform float uDoppler;         // 1 = effet Doppler relativiste, 0 = coupé
+uniform float uGravShift;       // 1 = décalage gravitationnel vers le rouge, 0 = coupé
+
 const float RS         = 1.0;   // rayon de Schwarzschild (horizon)
-const float DISK_IN    = 3.0;   // ISCO = 6GM/c² = 3 rs : dernière orbite stable
-const float DISK_OUT   = 12.0;
 const float ESCAPE_R   = 60.0;  // au-delà, le rayon est considéré libre
 const float PHOTON_R   = 1.5;   // sphère de photons : 3GM/c² = 1,5 rs
 const float STEP       = 0.2;   // pas = STEP * r : environ 0,2 radian d'arc par pas
@@ -61,8 +68,8 @@ vec3 blackbody(float T)
 //  en longues traînées spirales. uTime est ce temps t, en unités rs/c.
 // -----------------------------------------------------------------------------
 const float M          = 0.5 * RS;
-const int   NUM_CLUMPS = 14;      // amas de gaz chaud qui spiralent vers le trou noir
-const float CLUMP_LIFE = 900.0;   // durée moyenne de la chute, de 12 rs à l'ISCO
+const int   MAX_CLUMPS = 32;      // amas de gaz chaud qui spiralent vers le trou noir
+const float CLUMP_LIFE = 900.0;   // durée moyenne de la chute jusqu'au bord intérieur
 const float FLOW_CYCLE = 60.0;    // période de renouvellement de la texture
 
 float keplerOmega(float r)
@@ -97,12 +104,13 @@ float diskTurbulence(float r, float phi, float t)
 float diskClumps(float r, float phi, float t)
 {
     float sum = 0.0;
-    for (int i = 0; i < NUM_CLUMPS; ++i) {
+    for (int i = 0; i < MAX_CLUMPS; ++i) {
+        if (i >= uClumpCount) break;
         vec3 h = hash33(vec3(float(i) * 1.73 + 0.5, 3.1, 9.2));
         float life = CLUMP_LIFE * (0.7 + 0.6 * h.x);
         float age  = mod(t + h.y * life, life);
-        float r0   = DISK_OUT - 1.0 - 2.5 * h.z;
-        float vr   = (r0 - DISK_IN) / life;
+        float r0   = max(uDiskOut - 1.0 - 2.5 * h.z, uDiskIn + 0.5);
+        float vr   = (r0 - uDiskIn) / life;
         float rc   = r0 - vr * age;
         float ang  = h.x * 6.2831853 + 2.0 * sqrt(M) / vr * (inversesqrt(rc) - inversesqrt(r0));
 
@@ -128,14 +136,14 @@ float diskClumps(float r, float phi, float t)
 vec4 accretionDisk(vec3 p, vec3 rayDir)
 {
     float r = length(p.xz);
-    if (r < DISK_IN || r > DISK_OUT) return vec4(0.0);
+    if (r < uDiskIn || r > uDiskOut) return vec4(0.0);
     float phi = atan(p.z, p.x);
 
     // Profil de température d'un disque mince (Shakura-Sunyaev) :
     //   T(r) ∝ r^(-3/4) * (1 - sqrt(r_in / r))^(1/4)
-    float x = DISK_IN / r;
+    float x = uDiskIn / r;
     float profile = pow(x, 0.75) * pow(max(1.0 - sqrt(x), 0.0), 0.25);
-    float T = 4500.0 * profile / 0.488;  // normalisé pour ~4500 K au maximum
+    float T = uDiskTemp * profile / 0.488;  // 0,488 = maximum du profil : T max = uDiskTemp
 
     // Gaz turbulent et amas chauds : plus de matière = plus de chaleur.
     float turb   = diskTurbulence(r, phi, uTime);
@@ -153,19 +161,20 @@ vec4 accretionDisk(vec3 p, vec3 rayDir)
     // Effet Doppler relativiste : le côté qui vient vers nous est plus
     // lumineux et plus bleu. La lumière va du disque vers la caméra = -rayDir.
     float cosTheta = dot(orbitDir, -normalize(rayDir));
-    float doppler  = 1.0 / (gamma * (1.0 - beta * cosTheta));
+    float doppler  = mix(1.0, 1.0 / (gamma * (1.0 - beta * cosTheta)), uDoppler);
 
     // Décalage gravitationnel vers le rouge : la lumière perd de l'énergie
     // en sortant du puits de potentiel.
-    float gravShift = sqrt(1.0 - RS / r);
+    float gravShift = mix(1.0, sqrt(1.0 - RS / r), uGravShift);
 
     float g = doppler * gravShift;
     vec3 color = blackbody(T * g);
-    float intensity = pow(g, 4.0) * profile * 1.6 * heat;   // I_obs = g^4 * I_émis
+    float intensity = pow(g, 4.0) * profile * uDiskBrightness * heat;   // I_obs = g^4 * I_émis
 
     // Bords adoucis.
     // (smoothstep avec bord0 > bord1 n'est pas défini en GLSL : 1 - smoothstep.)
-    float edge = smoothstep(DISK_IN, DISK_IN + 0.3, r) * (1.0 - smoothstep(DISK_OUT - 4.0, DISK_OUT, r));
+    float fadeOut = min(4.0, 0.4 * (uDiskOut - uDiskIn));
+    float edge = smoothstep(uDiskIn, uDiskIn + 0.3, r) * (1.0 - smoothstep(uDiskOut - fadeOut, uDiskOut, r));
     float alpha = clamp(edge * (0.55 + 0.6 * turb + 0.5 * clumps), 0.0, 1.0);
 
     return vec4(color * intensity * edge, alpha);
