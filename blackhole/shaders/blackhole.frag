@@ -55,7 +55,11 @@ vec3 blackbody(float T)
     c.g = T <= 66.0 ? clamp(0.39008157 * log(T) - 0.63184144, 0.0, 1.0)
                     : clamp(1.12989086 * pow(T - 60.0, -0.0755148492), 0.0, 1.0);
     c.b = T >= 66.0 ? 1.0 : (T <= 19.0 ? 0.0 : clamp(0.54320678 * log(T - 10.0) - 1.19625408, 0.0, 1.0));
-    return c;
+    // Cette approximation donne une couleur sRGB (déjà corrigée gamma). Le rendu
+    // travaille en lumière linéaire et present.frag réapplique le gamma : sans
+    // cette conversion, les couleurs sont délavées (une étoile à 3000 K paraît
+    // crème au lieu d'orangée).
+    return pow(c, vec3(2.2));
 }
 
 // -----------------------------------------------------------------------------
