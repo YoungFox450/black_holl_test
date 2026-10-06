@@ -35,6 +35,20 @@ finit, le pixel prend la couleur :
 - Fond de galaxie procédural (étoiles, bande type Voie lactée, nébuleuses).
 - Caméra libre avec inertie, orbite automatique, pause et vitesse du temps.
 - Résolution de rendu réglée automatiquement pour tenir ~30 FPS.
+- **Simulation d'étoiles** (touche `E`) : Soleil, Proxima du Centaure,
+  Sirius A et B, Rigel, Bételgeuse, Aldébaran, étoile à neutrons, ou une
+  étoile créée à partir de sa masse. Couleur de corps noir, bord assombri,
+  granulation, taches et lentille gravitationnelle pour les objets compacts.
+  Les étoiles peu compactes sont tracées en ligne droite (la déviation y est
+  inférieure à 0,1°), ce qui les rend environ 2,5 fois plus rapides.
+- **Panneau de contrôle** (Dear ImGui, police Inter, `F1` ou `Tab`) : lecture
+  et vitesse du temps toujours visibles, onglets Objet (trou noir, disque,
+  étoiles), Vue, Rendu et Aide, ligne d'état avec les FPS, bulle d'aide sur
+  chaque réglage.
+
+![Panneau de contrôle](blackhole/docs/panneau.jpg)
+
+![Étoiles simulées](blackhole/docs/etoiles.jpg)
 
 ## Démarrage rapide
 
@@ -67,6 +81,9 @@ Le détail par système (paquets Linux, macOS) est dans
 | `Espace` | orbite automatique |
 | `P` / `+` / `-` | pause, accélérer, ralentir le temps |
 | `H` | afficher / cacher le disque |
+| `F1` ou `Tab` | afficher / cacher le panneau de contrôle |
+| `E` | passer du trou noir à une étoile, et retour |
+| `N` / `B` | étoile suivante / précédente |
 | `K` / `L` / `O` | baisser, augmenter la résolution, ou la laisser automatique |
 | `Échap` | quitter |
 
@@ -97,22 +114,29 @@ Les détails et les mesures sont dans
 ├── .vscode/                  tâches de compilation, débogage, extensions
 └── blackhole/
     ├── README.md             documentation technique et physique détaillée
-    ├── CMakeLists.txt        build (GLFW système ou téléchargé, glad embarqué)
+    ├── CMakeLists.txt        build (GLFW système ou téléchargé, glad et ImGui embarqués)
+    ├── assets/fonts/         police Inter du panneau (licence OFL)
     ├── docs/                 images de rendu
     ├── external/glad/        chargeur OpenGL 3.3 core (fichiers générés)
+    ├── external/imgui/       Dear ImGui (panneau de contrôle)
     ├── shaders/
     │   ├── blackhole.frag    le ray tracer : géodésiques, horizon, disque
+    │   ├── star.frag         ray tracer des étoiles
     │   ├── sky.frag          fond de galaxie, calculé une fois en cubemap
     │   ├── present.frag      agrandissement et tone mapping
     │   ├── noise.glsl        fonctions de bruit partagées
     │   └── fullscreen.vert   triangle plein écran
     └── src/
         ├── main.cpp          fenêtre, caméra, temps, boucle de rendu
+        ├── app.hpp           état de la simulation partagé
+        ├── ui.cpp/.hpp       panneau de contrôle
+        ├── ui_kit.cpp/.hpp   thème et composants du panneau
+        ├── star.cpp/.hpp     modèle physique des étoiles
         └── shader.cpp/.hpp   chargement et compilation des shaders
 ```
 
-La physique (équation des photons, horizon, disque, Doppler) est expliquée
-pas à pas dans [`blackhole/README.md`](blackhole/README.md#la-physique-utilisée).
+La physique (équation des photons, horizon, disque, Doppler, modèle des
+étoiles) est expliquée pas à pas dans [`blackhole/README.md`](blackhole/README.md#la-physique-utilisée).
 
 ## Historique
 
@@ -121,14 +145,26 @@ pas à pas dans [`blackhole/README.md`](blackhole/README.md#la-physique-utilisé
 | 1. Moteur de base | Rayons courbés (Schwarzschild, RK4), horizon, disque avec Doppler, fond procédural, config VS Code |
 | 2. Caméra et animation | Caméra libre avec inertie, disque d'accrétion animé, contrôle du temps |
 | 3. Optimisation Intel | Ciel en cubemap, résolution automatique, pas adaptatif, arrêt anticipé |
-| 4. Build | GLFW du système utilisé s'il existe, README racine |
+| 4. Build et CI | GLFW du système utilisé s'il existe, compilation automatique Linux / Windows sur GitHub |
+| 5. Documentation | README racine complet, images de rendu à jour |
+| 6. Étoiles et panneau | Simulation d'étoiles, panneau de contrôle Dear ImGui |
+| 7. Couleurs | Couleurs de corps noir converties en lumière linéaire : étoiles froides et disque bien orangés |
+| 8. Nouveau panneau | Thème moderne avec onglets et cartes, police Inter, étoiles 2,5 fois plus rapides |
 
 ## Pistes pour la suite
+
+En préparation (PR ouvertes) :
+
+- activité des étoiles calculée à partir de leur rotation et de leur type
+  (taches, cycle, éruptions, oscillations) ;
+- pulsars et magnétars, quasar avec jets relativistes, astéroïdes en orbite.
+
+Idées pour la suite :
 
 - Trou noir en rotation (métrique de Kerr) : ombre asymétrique.
 - Anti-aliasing (plusieurs rayons par pixel) et bloom autour du disque.
 - Fond de ciel à partir d'une vraie image HDR de la Voie lactée.
-- Interface de réglage en direct (masse, disque, vitesse) avec Dear ImGui.
+- Plusieurs objets dans la même scène (étoile en orbite autour du trou noir).
 
 ## Régénérer les images de ce README
 
