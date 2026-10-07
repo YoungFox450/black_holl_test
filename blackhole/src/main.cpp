@@ -24,17 +24,6 @@
 //   K / L                   : baisser / augmenter la résolution du rendu
 //   O                       : résolution automatique (activée au départ)
 //   R                       : recharger les shaders (après modification)
-//   E                       : passer du trou noir à une étoile (et retour)
-//   N / B                   : étoile suivante / précédente (Soleil, Bételgeuse...)
-//   I / U                   : étoile de la séquence principale plus / moins massive
-//   J                       : jets relativistes (quasar)
-//   V                       : lentille gravitationnelle (marche / arrêt)
-//   T                       : pendant la pause, avancer d'un pas de temps
-//   F / G                   : ajouter un champ d'astéroïdes / un astéroïde
-//   X                       : retirer tous les astéroïdes
-//   M                       : éjection de masse coronale (étoile active)
-//   F1 ou Tab               : afficher / cacher le panneau (onglet Touches :
-//                             liste complète des touches)
 //   Échap                   : quitter
 //
 // Options :
@@ -42,26 +31,14 @@
 //   --scale S       : résolution fixe, S = fraction de la fenêtre (0.25 à 1)
 //   --sky N         : taille d'une face du fond de ciel (1024 par défaut)
 //   --screenshot image.ppm [--width W --height H]
-//                [--no-disk] [--no-lensing] [--time T] [--yaw A] [--pitch A] [--distance D]
+//                [--no-disk] [--time T] [--yaw A] [--pitch A] [--distance D]
 //                   : rend une seule image hors écran puis quitte
 //   --bench N       : rend N images hors écran et affiche le temps moyen
-//   --star N        : affiche l'étoile n° N de la liste (0 = Soleil)
-//   --mass M        : affiche une étoile de la séquence principale de M masses solaires
-//   --rotation D    : période de rotation de l'étoile en jours (après --star / --mass)
-//   --quasar        : trou noir supermassif avec disque brillant et jets
-//   --binary        : système double, étoile compagne dont le gaz est arraché
-//   --bh-mass M     : masse du trou noir (masses solaires)
-//   --field N       : ajoute un champ de N astéroïdes
-//   --advance T     : fait avancer les astéroïdes de T unités de temps avant l'image
 
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
 
-#include "app.hpp"
-#include "binary_gfx.hpp"
 #include "shader.hpp"
-#include "ui.hpp"
-#include "star.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -75,28 +52,101 @@
 
 namespace {
 
+struct Vec3 {
+    float x, y, z;
+};
+Vec3 operator-(Vec3 a) { return {-a.x, -a.y, -a.z}; }
+Vec3 cross(Vec3 a, Vec3 b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
+Vec3 normalize(Vec3 a)
+{
+    float l = std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+    return {a.x / l, a.y / l, a.z / l};
+}
+
+constexpr float kMinDistance = 2.5f;   // en rayons de Schwarzschild
+constexpr float kMaxDistance = 55.0f;
+constexpr float kMaxPitch = 1.5f;      // ~86°, évite le basculement aux pôles
+
+constexpr float kMinScale = 0.25f;
+constexpr float kMaxScale = 1.0f;
+// Nombre max de pas par rayon : garde-fou. Avec le pas proportionnel à r, un
+// rayon qui s'échappe en prend ~20 et un tour de la sphère de photons ~30.
+constexpr int kMaxSteps = 200;
+
+// Caméra en orbite autour du trou noir (placé à l'origine).
+// Les vitesses donnent un mouvement fluide avec inertie.
+struct OrbitCamera {
+    float yaw = 0.0f;
+    float pitch = 0.09f;      // légèrement au-dessus du disque
+    float distance = 22.0f;
+    float targetDistance = 22.0f;
+    float fovY = 1.0f;        // ~57°
+
+    float yawVel = 0.0f;      // rad/s
+    float pitchVel = 0.0f;    // rad/s
+    bool autoOrbit = false;
+
+    Vec3 position() const
+    {
+        return {distance * std::cos(pitch) * std::sin(yaw),
+                distance * std::sin(pitch),
+                distance * std::cos(pitch) * std::cos(yaw)};
+    }
+
+    void update(float dt, bool dragging)
+    {
+        if (!dragging) {
+            yaw += yawVel * dt;
+            pitch += pitchVel * dt;
+            float damping = std::exp(-3.0f * dt);
+            yawVel *= damping;
+            pitchVel *= damping;
+        }
+        if (autoOrbit)
+            yaw += 0.12f * dt;
+        if (pitch > kMaxPitch || pitch < -kMaxPitch) {
+            pitch = std::clamp(pitch, -kMaxPitch, kMaxPitch);
+            pitchVel = 0.0f;
+        }
+        // Zoom lissé.
+        distance += (targetDistance - distance) * (1.0f - std::exp(-8.0f * dt));
+    }
+};
+
+struct App {
+    OrbitCamera camera;
+    bool dragging = false;
+    double lastX = 0.0, lastY = 0.0;
+    double lastMoveTime = 0.0;
+    bool showDisk = true;
+    bool reloadRequested = false;
+
+    // Temps de simulation en unités rs/c. simSpeed = unités par seconde réelle.
+    double simTime = 0.0;
+    float simSpeed = 10.0f;
+    bool paused = false;
+
+    float renderScale = 0.5f;   // fraction de la taille de la fenêtre
+    bool autoScale = true;
+};
+
 std::string shaderDir = BH_SHADER_DIR;
 
 // Les trois programmes et leurs uniforms (cherchés une seule fois).
 struct Programs {
-    GLuint sky = 0, trace = 0, present = 0, star = 0, asteroid = 0;
+    GLuint sky = 0, trace = 0, present = 0;
 
     GLint skyFace = -1, skyFaceSize = -1;
     GLint resolution = -1, time = -1, camPos = -1, camRight = -1, camUp = -1,
           camForward = -1, fovY = -1, disk = -1, maxSteps = -1, skyTex = -1;
-    GLint diskIn = -1, diskOut = -1, diskTemp = -1, diskBrightness = -1, clumpCount = -1,
-          doppler = -1, gravShift = -1, jets = -1, jetBeta = -1, jetWidth = -1,
-          lensing = -1, skyGain = -1;
-    GLint image = -1, outputSize = -1, exposure = -1;
+    GLint image = -1, outputSize = -1;
 
     void destroy()
     {
         glDeleteProgram(sky);
         glDeleteProgram(trace);
         glDeleteProgram(present);
-        glDeleteProgram(star);
-        glDeleteProgram(asteroid);
-        sky = trace = present = star = asteroid = 0;
+        sky = trace = present = 0;
     }
 };
 
@@ -108,9 +158,7 @@ bool buildPrograms(Programs& out)
     p.sky = loadShaderProgram({vert}, {noise, shaderDir + "/sky.frag"});
     p.trace = loadShaderProgram({vert}, {noise, shaderDir + "/blackhole.frag"});
     p.present = loadShaderProgram({vert}, {shaderDir + "/present.frag"});
-    p.star = loadShaderProgram({vert}, {noise, shaderDir + "/star.frag"});
-    p.asteroid = loadShaderProgram({shaderDir + "/asteroid.vert"}, {shaderDir + "/asteroid.frag"});
-    if (!p.sky || !p.trace || !p.present || !p.star || !p.asteroid) {
+    if (!p.sky || !p.trace || !p.present) {
         p.destroy();
         return false;
     }
@@ -128,22 +176,9 @@ bool buildPrograms(Programs& out)
     p.disk = glGetUniformLocation(p.trace, "uDisk");
     p.maxSteps = glGetUniformLocation(p.trace, "uMaxSteps");
     p.skyTex = glGetUniformLocation(p.trace, "uSky");
-    p.diskIn = glGetUniformLocation(p.trace, "uDiskIn");
-    p.diskOut = glGetUniformLocation(p.trace, "uDiskOut");
-    p.diskTemp = glGetUniformLocation(p.trace, "uDiskTemp");
-    p.diskBrightness = glGetUniformLocation(p.trace, "uDiskBrightness");
-    p.clumpCount = glGetUniformLocation(p.trace, "uClumpCount");
-    p.doppler = glGetUniformLocation(p.trace, "uDoppler");
-    p.gravShift = glGetUniformLocation(p.trace, "uGravShift");
-    p.jets = glGetUniformLocation(p.trace, "uJets");
-    p.jetBeta = glGetUniformLocation(p.trace, "uJetBeta");
-    p.jetWidth = glGetUniformLocation(p.trace, "uJetWidth");
-    p.lensing = glGetUniformLocation(p.trace, "uLensing");
-    p.skyGain = glGetUniformLocation(p.trace, "uSkyGain");
 
     p.image = glGetUniformLocation(p.present, "uImage");
     p.outputSize = glGetUniformLocation(p.present, "uOutputSize");
-    p.exposure = glGetUniformLocation(p.present, "uExposure");
 
     out = p;
     return true;
@@ -232,10 +267,8 @@ void traceSize(int outW, int outH, float scale, int& w, int& h)
 
 // Passe 2 : ray tracing dans target.
 void traceFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarget& target,
-                const App& app, float time)
+                const OrbitCamera& cam, float time, bool disk)
 {
-    const OrbitCamera& cam = app.camera;
-    const DiskSettings& disk = app.disk;
     Vec3 pos = cam.position();
     Vec3 forward = normalize(-pos);
     Vec3 right = normalize(cross(forward, {0.0f, 1.0f, 0.0f}));
@@ -244,7 +277,6 @@ void traceFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarg
     glBindFramebuffer(GL_FRAMEBUFFER, target.fbo);
     glViewport(0, 0, target.width, target.height);
     glUseProgram(prog.trace);
-    setCompanionUniforms(prog.trace, app);
     glUniform2f(prog.resolution, float(target.width), float(target.height));
     glUniform1f(prog.time, time);
     glUniform3f(prog.camPos, pos.x, pos.y, pos.z);
@@ -252,20 +284,8 @@ void traceFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarg
     glUniform3f(prog.camUp, up.x, up.y, up.z);
     glUniform3f(prog.camForward, forward.x, forward.y, forward.z);
     glUniform1f(prog.fovY, cam.fovY);
-    glUniform1i(prog.disk, app.showDisk ? 1 : 0);
-    glUniform1i(prog.maxSteps, app.maxSteps);
-    glUniform1f(prog.diskIn, disk.innerRadius);
-    glUniform1f(prog.diskOut, std::max(disk.outerRadius, disk.innerRadius + 0.5f));
-    glUniform1f(prog.diskTemp, disk.maxTemperature);
-    glUniform1f(prog.diskBrightness, disk.brightness);
-    glUniform1i(prog.clumpCount, disk.clumpCount);
-    glUniform1f(prog.doppler, disk.doppler ? 1.0f : 0.0f);
-    glUniform1f(prog.gravShift, disk.gravitationalShift ? 1.0f : 0.0f);
-    glUniform1f(prog.jets, app.jets ? app.jetPower : 0.0f);
-    glUniform1f(prog.jetBeta, std::clamp(app.jetBeta, 0.0f, 0.995f));
-    glUniform1f(prog.jetWidth, app.jetWidth);
-    glUniform1f(prog.lensing, app.lensing ? 1.0f : 0.0f);
-    glUniform1f(prog.skyGain, app.skyBrightness);
+    glUniform1i(prog.disk, disk ? 1 : 0);
+    glUniform1i(prog.maxSteps, kMaxSteps);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, skyTex);
     glUniform1i(prog.skyTex, 0);
@@ -273,339 +293,9 @@ void traceFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarg
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
-// Position (repère fixe) d'un point de latitude/longitude données à la
-// surface de l'étoile, entraîné par la rotation différentielle.
-Vec3 surfacePoint(double lat, double lon, double angle)
-{
-    double a = lon + angle;
-    double c = std::cos(lat);
-    // Même convention que rotateY() dans star.frag.
-    return {float(c * std::cos(a)), float(std::sin(lat)), float(-c * std::sin(a))};
-}
-
-// Avance la simulation des éruptions de l'étoile jusqu'au temps simTime.
-void updateStarActivity(App& app, double simTime)
-{
-    StellarActivity act = computeActivity(app.star);
-    double days = simTime / 10.0 * kStarDaysPerSecond;
-    CycleState cyc = cycleState(act, cyclePhase(app, act));
-    app.flares.update(app.star, act, cyc, days);
-    app.corona.update(app.star, act, cyc, days, starRotationAngle(app.star, days));
-}
-
-// Passe 2 bis : ray tracing d'une étoile (shaders/star.frag). Les paramètres
-// du shader viennent du modèle physique de l'étoile (src/star.cpp) et de
-// son activité magnétique (src/activity.cpp).
-void traceStarFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarget& target,
-                    const App& app, double simTime)
-{
-    const OrbitCamera& cam = app.camera;
-    const Star& star = app.star;
-    Vec3 pos = cam.position();
-    Vec3 forward = normalize(-pos);
-    Vec3 right = normalize(cross(forward, {0.0f, 1.0f, 0.0f}));
-    Vec3 up = cross(right, forward);
-    GLuint p = prog.star;
-    auto loc = [p](const char* name) { return glGetUniformLocation(p, name); };
-
-    const double seconds = simTime / 10.0;
-    const double days = seconds * kStarDaysPerSecond;
-    const StellarActivity act = computeActivity(star);
-    const CycleState cyc = cycleState(act, cyclePhase(app, act));
-    const double kTwoPi = 6.283185307179586;
-
-    // Rotation : angle de l'équateur et cisaillement (rotation différentielle),
-    // avec le même facteur de ralenti que la rotation.
-    double omega = displayOmega(star);
-    double rotation = std::fmod(omega * days, kTwoPi);
-    double shear = act.shearRatio * omega; // rad/jour
-
-    // Étoiles à neutrons : 30 tours par seconde (Crabe) seraient un simple
-    // flou. Rotation ralentie mais qui garde l'ordre : le pulsar milliseconde
-    // tourne plus vite que le Crabe, le magnétar (7,5 s) bien plus lentement.
-    const bool compact = star.compact != Compact::None;
-    if (compact) {
-        double rotSpeed = std::clamp(3.0 * std::pow(0.0337 / star.spinPeriod(), 0.3), 0.3, 6.0);
-        rotation = std::fmod(seconds * rotSpeed, kTwoPi);
-        shear = 0.0;
-    }
-    float beam = 0.0f, field = 0.0f;
-    if (star.compact == Compact::Pulsar) {
-        beam = 1.0f;
-        // Lignes de champ à peine visibles, d'autant plus que B est fort.
-        field = std::clamp(float((std::log10(std::max(star.magneticField, 1.0)) - 7.0) / 4.0), 0.0f, 0.35f);
-    } else if (star.compact == Compact::Magnetar) {
-        beam = 0.25f;
-        field = 1.0f;
-    }
-
-    glBindFramebuffer(GL_FRAMEBUFFER, target.fbo);
-    glViewport(0, 0, target.width, target.height);
-    glUseProgram(p);
-    glUniform2f(loc("uResolution"), float(target.width), float(target.height));
-    glUniform1f(loc("uTime"), float(seconds));
-    glUniform3f(loc("uCamPos"), pos.x, pos.y, pos.z);
-    glUniform3f(loc("uCamRight"), right.x, right.y, right.z);
-    glUniform3f(loc("uCamUp"), up.x, up.y, up.z);
-    glUniform3f(loc("uCamForward"), forward.x, forward.y, forward.z);
-    glUniform1f(loc("uFovY"), cam.fovY);
-    glUniform1i(loc("uMaxSteps"), app.maxSteps);
-    glUniform1f(loc("uStarTemp"), float(star.temperature));
-    glUniform1f(loc("uCompact"), float(star.compactness()));
-    glUniform1f(loc("uLensing"), app.lensing ? 1.0f : 0.0f);
-    glUniform1f(loc("uSkyGain"), app.skyBrightness);
-    glUniform1f(loc("uLimb"), float(star.limbDarkening()));
-    glUniform1f(loc("uGranScale"), float(star.granulationScale()));
-    glUniform1f(loc("uRotation"), float(rotation));
-    glUniform1f(loc("uPulse"), float(oscillation(act, days)));
-
-    // Taches : amplitude de chaque bande telle que la fraction de surface
-    // tachée vaille f × niveau du cycle × part de la bande.
-    const double deg = kTwoPi / 360.0;
-    double sigma = 7.0 * (1.0 + 2.0 * act.polewardShift) * deg;
-    float band[4] = {0, 0, 0, 0};
-    for (int k = 0; k < 2; ++k) {
-        double lat0 = cyc.bandLatDeg[k] * deg;
-        double integral = 0.0; // ∫₀^π/2 G(λ) cos λ dλ (les deux hémisphères)
-        const int n = 200;
-        for (int i = 0; i < n; ++i) {
-            double lat = (i + 0.5) / n * kTwoPi / 4.0;
-            double x = (lat - lat0) / sigma;
-            integral += std::exp(-0.5 * x * x) * std::cos(lat) * (kTwoPi / 4.0) / n;
-        }
-        band[2 * k] = float(lat0);
-        band[2 * k + 1] = float(act.spotCoverage * cyc.level * cyc.bandWeight[k] / integral);
-    }
-    glUniform1i(loc("uSpotsOn"), act.active() ? 1 : 0);
-    glUniform4f(loc("uBand"), band[0], band[1], band[2], band[3]);
-    glUniform1f(loc("uBandWidth"), float(sigma));
-    glUniform1f(loc("uFaculaRatio"), float(act.active() ? act.faculaCoverage / act.spotCoverage : 0.0));
-    glUniform1f(loc("uUmbraRatio"), float(act.active() ? act.umbraTemp / star.temperature : 1.0));
-    glUniform1f(loc("uPenumbraRatio"), float(act.active() ? act.penumbraTemp / star.temperature : 1.0));
-
-    // Deux générations de taches décalées d'une demi-vie : poids sin² et cos²
-    // (somme 1), chacune cisaillée depuis sa naissance seulement.
-    float layers[6] = {0, 0, 0, 0, 0, 0};
-    if (act.active()) {
-        double life = act.spotLifetimeDays;
-        for (int k = 0; k < 2; ++k) {
-            double u = days / life + 0.5 * k;
-            double gen = std::floor(u);
-            double age = u - gen;
-            double w = std::sin(age * kTwoPi / 2.0);
-            layers[3 * k + 0] = float(w * w);
-            layers[3 * k + 1] = float(shear * age * life);
-            layers[3 * k + 2] = float(std::fmod(2.0 * gen + k, 64.0));
-        }
-    }
-    glUniform3fv(loc("uSpotLayer"), 2, layers);
-
-    // Éruptions en cours.
-    float flarePos[4 * FlareSimulator::kMax] = {};
-    float flareAmp[FlareSimulator::kMax] = {};
-    int nFlares = 0;
-    for (int i = 0; i < app.flares.count(); ++i) {
-        const Flare& f = app.flares.flares()[i];
-        double s2 = std::sin(f.latitude) * std::sin(f.latitude);
-        double angle = std::fmod((omega - shear * s2) * days, kTwoPi);
-        Vec3 d = surfacePoint(f.latitude, f.longitude, angle);
-        flarePos[4 * nFlares + 0] = d.x;
-        flarePos[4 * nFlares + 1] = d.y;
-        flarePos[4 * nFlares + 2] = d.z;
-        flarePos[4 * nFlares + 3] = float(std::max(2.0 * f.areaFraction, 1e-5));
-        flareAmp[nFlares] = float(app.flares.profile(f, days));
-        ++nFlares;
-    }
-    glUniform1i(loc("uFlareCount"), nFlares);
-    glUniform4fv(loc("uFlarePos"), FlareSimulator::kMax, flarePos);
-    glUniform1fv(loc("uFlareAmp"), FlareSimulator::kMax, flareAmp);
-
-    // Couronne, protubérances, éjections de masse coronale (src/corona.cpp).
-    const CoronaModel cor = computeCorona(star, act);
-    float corona = 0.0f;
-    if (app.showCorona && cor.active)
-        corona = float(std::clamp(std::log10(std::max(cor.xrayFlux, 1.0) / 1.0e3) / 3.5, 0.15, 1.0));
-    glUniform1f(loc("uCorona"), corona);
-    {
-        // Lumière de l'étoile diffusée par les électrons : sa couleur, à moitié
-        // blanchie. Même formule que blackbody() de star.frag (lumière linéaire).
-        const double t = std::clamp(star.temperature, 1000.0, 40000.0) / 100.0;
-        auto c01 = [](double v) { return std::pow(std::clamp(v, 0.0, 1.0), 2.2); };
-        double r = t <= 66.0 ? 1.0 : c01(1.29293618 * std::pow(t - 60.0, -0.1332047592));
-        double g = t <= 66.0 ? c01(0.39008157 * std::log(t) - 0.63184144)
-                             : c01(1.12989086 * std::pow(t - 60.0, -0.0755148492));
-        double b = t >= 66.0 ? 1.0 : (t <= 19.0 ? 0.0 : c01(0.54320678 * std::log(t - 10.0) - 1.19625408));
-        glUniform3f(loc("uCoronaTint"), float(0.5 + 0.5 * r), float(0.5 + 0.5 * g), float(0.5 + 0.5 * b));
-    }
-    glUniform1f(loc("uStreamers"), float(1.0 - std::clamp((cyc.level - 0.3) / 1.2, 0.0, 1.0)));
-
-    const int kP = CoronaSimulator::kMaxProminences, kC = CoronaSimulator::kMaxCmes;
-    float pa[4 * kP] = {}, pb[4 * kP] = {}, pc[4 * kP] = {};
-    int nProm = 0;
-    for (int i = 0; app.showProminences && i < app.corona.prominenceCount(); ++i) {
-        const Prominence& pr = app.corona.prominences()[i];
-        double fade = app.corona.fadeAt(pr, days);
-        if (fade <= 0.0) continue;
-        double a = pr.longitude + rotation;
-        double sl = std::sin(pr.latitude), cl = std::cos(pr.latitude);
-        Vec3 c = surfacePoint(pr.latitude, pr.longitude, rotation);
-        // Vecteurs est et nord à la surface, puis direction de la protubérance.
-        Vec3 east = {float(-std::sin(a)), 0.0f, float(-std::cos(a))};
-        Vec3 north = {float(-sl * std::cos(a)), float(cl), float(sl * std::sin(a))};
-        float co = float(std::cos(pr.orientation)), so = float(std::sin(pr.orientation));
-        Vec3 tg = normalize({co * east.x + so * north.x, co * east.y + so * north.y, co * east.z + so * north.z});
-        float* A = pa + 4 * nProm;
-        float* B = pb + 4 * nProm;
-        float* C = pc + 4 * nProm;
-        A[0] = c.x; A[1] = c.y; A[2] = c.z; A[3] = float(pr.halfLength);
-        B[0] = tg.x; B[1] = tg.y; B[2] = tg.z; B[3] = float(app.corona.heightAt(pr, days));
-        C[0] = float(pr.type); C[1] = pr.seed; C[2] = float(fade); C[3] = float(app.corona.liftAt(pr, days));
-        ++nProm;
-    }
-    glUniform1i(loc("uPromCount"), nProm);
-    glUniform4fv(loc("uPromA"), kP, pa);
-    glUniform4fv(loc("uPromB"), kP, pb);
-    glUniform4fv(loc("uPromC"), kP, pc);
-
-    float ca[4 * kC] = {}, cb[4 * kC] = {};
-    int nCme = 0;
-    for (int i = 0; app.showCmes && i < app.corona.cmeCount(); ++i) {
-        const Cme& cm = app.corona.cmes()[i];
-        double b = app.corona.cmeBrightness(cm, days);
-        if (b <= 0.0) continue;
-        float* A = ca + 4 * nCme;
-        A[0] = float(cm.dir[0]); A[1] = float(cm.dir[1]); A[2] = float(cm.dir[2]);
-        A[3] = float(app.corona.cmeRadius(cm, days));
-        cb[4 * nCme] = float(b);
-        cb[4 * nCme + 1] = float(i * 17 + 3);
-        ++nCme;
-    }
-    glUniform1i(loc("uCmeCount"), nCme);
-    glUniform4fv(loc("uCmeA"), kC, ca);
-    glUniform4fv(loc("uCmeB"), kC, cb);
-
-    glUniform1f(loc("uMagTilt"), float(star.magneticTilt * 3.14159265 / 180.0));
-    glUniform1f(loc("uBeam"), beam);
-    glUniform1f(loc("uField"), field);
-    glUniform1f(loc("uBursts"), star.compact == Compact::Magnetar ? 1.0f : 0.0f);
-    glUniform1f(loc("uCaps"), compact && star.magneticField > 0.0 ? 1.0f : 0.0f);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, skyTex);
-    glUniform1i(loc("uSky"), 0);
-    glBindVertexArray(vao);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-}
-
-// Astéroïdes : positions envoyées à la carte graphique à chaque image et
-// dessinées en points par-dessus le ray tracing (shaders/asteroid.*).
-struct AsteroidRenderer {
-    GLuint vao = 0, vbo = 0;
-    std::vector<float> data;
-
-    void draw(const Programs& prog, const TraceTarget& target, const App& app)
-    {
-        const auto& items = app.asteroids.items;
-        if (!app.showAsteroids || items.empty()) return;
-        if (!vao) {
-            glGenVertexArrays(1, &vao);
-            glGenBuffers(1, &vbo);
-            glBindVertexArray(vao);
-            glBindBuffer(GL_ARRAY_BUFFER, vbo);
-            glEnableVertexAttribArray(0);
-            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
-            glEnableVertexAttribArray(1);
-            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
-                                  reinterpret_cast<void*>(3 * sizeof(float)));
-        }
-        data.clear();
-        for (const Asteroid& a : items) {
-            data.insert(data.end(), {float(a.pos[0]), float(a.pos[1]), float(a.pos[2]),
-                                     a.sizeKm, a.heat, a.fragment ? 1.0f : 0.0f});
-        }
-        glBindVertexArray(vao);
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(data.size() * sizeof(float)), data.data(), GL_STREAM_DRAW);
-
-        const OrbitCamera& cam = app.camera;
-        Vec3 pos = cam.position();
-        Vec3 forward = normalize(-pos);
-        Vec3 right = normalize(cross(forward, {0.0f, 1.0f, 0.0f}));
-        Vec3 up = cross(right, forward);
-        GLuint p = prog.asteroid;
-        auto loc = [p](const char* name) { return glGetUniformLocation(p, name); };
-
-        // Lumière du corps central : le disque pour le trou noir, la surface
-        // pour une étoile (couleur de corps noir approchée, assez pour la roche).
-        float lr = 1.0f, lg = 0.85f, lb = 0.7f, scale = 120.0f, ambient = 0.6f;
-        if (app.starMode) {
-            double t = std::clamp(app.star.temperature, 2000.0, 40000.0);
-            lr = float(std::clamp(1.6 - t / 12000.0, 0.6, 1.0));
-            lg = float(std::clamp(0.4 + t / 12000.0, 0.5, 0.95));
-            lb = float(std::clamp(t / 9000.0, 0.25, 1.0));
-            scale = 6.0f;
-            ambient = 0.0f;
-        } else if (!app.showDisk) {
-            scale = 2.0f;   // sans disque, seulement la lueur du ciel
-        } else {
-            scale *= app.disk.brightness / 1.6f;
-        }
-
-        glBindFramebuffer(GL_FRAMEBUFFER, target.fbo);
-        glViewport(0, 0, target.width, target.height);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glEnable(GL_PROGRAM_POINT_SIZE);
-        glUseProgram(p);
-        glUniform3f(loc("uCamPos"), pos.x, pos.y, pos.z);
-        glUniform3f(loc("uCamRight"), right.x, right.y, right.z);
-        glUniform3f(loc("uCamUp"), up.x, up.y, up.z);
-        glUniform3f(loc("uCamForward"), forward.x, forward.y, forward.z);
-        glUniform1f(loc("uTanHalf"), std::tan(cam.fovY * 0.5f));
-        glUniform1f(loc("uAspect"), float(target.width) / float(target.height));
-        glUniform1f(loc("uResY"), float(target.height));
-        // Ombre du trou noir : paramètre d'impact critique 3√3/2 rs ≈ 2,6 rs.
-        glUniform1f(loc("uOccluder"), app.starMode ? 1.0f : 2.598f);
-        glUniform1f(loc("uBlackHole"), app.starMode ? 0.0f : 1.0f);
-        glUniform1i(loc("uDisk"), !app.starMode && app.showDisk ? 1 : 0);
-        glUniform1f(loc("uDiskIn"), app.disk.innerRadius);
-        glUniform1f(loc("uDiskOut"), app.disk.outerRadius);
-        glUniform1f(loc("uLightScale"), scale);
-        glUniform3f(loc("uLightColor"), lr, lg, lb);
-        glUniform1f(loc("uAmbient"), ambient);
-        glUniform1f(loc("uSizeScale"), app.asteroidScale);
-        glDrawArrays(GL_POINTS, 0, GLsizei(items.size()));
-        glDisable(GL_PROGRAM_POINT_SIZE);
-        glDisable(GL_BLEND);
-    }
-
-    void destroy()
-    {
-        glDeleteBuffers(1, &vbo);
-        glDeleteVertexArrays(1, &vao);
-        vao = vbo = 0;
-    }
-};
-
-AsteroidRenderer asteroidGfx;
-
-// Trou noir ou étoile, selon le mode, puis les astéroïdes.
-void traceScene(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarget& target,
-                const App& app, double simTime)
-{
-    if (app.starMode) {
-        traceStarFrame(prog, vao, skyTex, target, app, simTime);
-    } else {
-        app.binary.update(simTime, app.showDisk ? app.disk.outerRadius : 0.0);
-        traceFrame(prog, vao, skyTex, target, app, float(simTime));
-    }
-    asteroidGfx.draw(prog, target, app);
-    if (!app.starMode)
-        drawGasStream(shaderDir, target.fbo, target.width, target.height, app);
-}
-
 // Passe 3 : agrandissement + tone mapping vers outFbo (0 = la fenêtre).
 void presentFrame(const Programs& prog, GLuint vao, const TraceTarget& target, GLuint outFbo,
-                  int outW, int outH, float exposure)
+                  int outW, int outH)
 {
     glBindFramebuffer(GL_FRAMEBUFFER, outFbo);
     glViewport(0, 0, outW, outH);
@@ -614,7 +304,6 @@ void presentFrame(const Programs& prog, GLuint vao, const TraceTarget& target, G
     glBindTexture(GL_TEXTURE_2D, target.tex);
     glUniform1i(prog.image, 0);
     glUniform2f(prog.outputSize, float(outW), float(outH));
-    glUniform1f(prog.exposure, exposure);
     glBindVertexArray(vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
@@ -625,7 +314,6 @@ void onMouseButton(GLFWwindow* window, int button, int action, int)
 {
     App* app = appOf(window);
     if (button != GLFW_MOUSE_BUTTON_LEFT) return;
-    if (action == GLFW_PRESS && uiWantsMouse()) return;   // clic sur le panneau
     double now = glfwGetTime();
     app->dragging = (action == GLFW_PRESS);
     // Au clic, ou si la souris était immobile avant le relâchement : pas d'élan.
@@ -641,9 +329,8 @@ void onCursorPos(GLFWwindow* window, double x, double y)
 {
     App* app = appOf(window);
     if (!app->dragging) return;
-    const float k = 0.005f * app->mouseSensitivity;
-    float dYaw = -float(x - app->lastX) * k;
-    float dPitch = float(y - app->lastY) * k;
+    float dYaw = -float(x - app->lastX) * 0.005f;
+    float dPitch = float(y - app->lastY) * 0.005f;
     app->camera.yaw += dYaw;
     app->camera.pitch = std::clamp(app->camera.pitch + dPitch, -kMaxPitch, kMaxPitch);
 
@@ -664,7 +351,6 @@ void zoom(OrbitCamera& cam, float steps)
 
 void onScroll(GLFWwindow* window, double, double dy)
 {
-    if (uiWantsMouse()) return;
     zoom(appOf(window)->camera, float(dy));
 }
 
@@ -672,17 +358,9 @@ void onKey(GLFWwindow* window, int key, int, int action, int)
 {
     if (action != GLFW_PRESS) return;
     App* app = appOf(window);
-    if (key == GLFW_KEY_F1 || key == GLFW_KEY_TAB) {
-        app->showUi = !app->showUi;
-        return;
-    }
-    if (uiWantsKeyboard()) return;   // saisie dans le panneau
     switch (key) {
     case GLFW_KEY_ESCAPE: glfwSetWindowShouldClose(window, GLFW_TRUE); break;
-    case GLFW_KEY_SPACE:
-        app->camera.autoOrbit = !app->camera.autoOrbit;
-        notify(*app, std::string("Orbite automatique : ") + onOff(app->camera.autoOrbit));
-        break;
+    case GLFW_KEY_SPACE: app->camera.autoOrbit = !app->camera.autoOrbit; break;
     default: break;
     }
 }
@@ -691,99 +369,27 @@ void onKey(GLFWwindow* window, int key, int, int action, int)
 // la disposition du clavier (AZERTY, QWERTY...).
 void onChar(GLFWwindow* window, unsigned int c)
 {
-    if (uiWantsKeyboard()) return;
     App* app = appOf(window);
-    App& a = *app;
-    char buf[96];
     switch (c) {
-    case 'h': case 'H':
-        a.showDisk = !a.showDisk;
-        notify(a, std::string("Disque d'accrétion : ") + onOff(a.showDisk));
-        break;
-    case 'r': case 'R':
-        a.reloadRequested = true;
-        notify(a, "Shaders rechargés");
-        break;
-    case 'p': case 'P':
-        a.paused = !a.paused;
-        notify(a, a.paused ? "Pause (T : avancer d'un pas)" : "Lecture");
-        break;
-    case 't': case 'T':
-        if (a.paused) {
-            ++a.stepRequests;
-            notify(a, "Un pas de temps");
-        } else {
-            notify(a, "T avance d'un pas pendant la pause (P)");
-        }
-        break;
-    case 'c': case 'C':
-        resetCamera(a);
-        notify(a, "Caméra recentrée");
-        break;
-    case '+': case '-':
-        a.simSpeed = c == '+' ? std::min(a.simSpeed * 1.5f, 200.0f) : std::max(a.simSpeed / 1.5f, 0.25f);
-        std::snprintf(buf, sizeof(buf), "Vitesse du temps : × %.3g", a.simSpeed);
-        notify(a, buf);
-        break;
-    case 'o': case 'O':
-        a.autoScale = !a.autoScale;
-        notify(a, std::string("Résolution automatique : ") + onOff(a.autoScale));
-        break;
-    case 'k': case 'K': case 'l': case 'L':
-        a.autoScale = false;
-        a.renderScale = (c == 'k' || c == 'K') ? std::max(kMinScale, a.renderScale - 0.05f)
-                                               : std::min(kMaxScale, a.renderScale + 0.05f);
-        std::snprintf(buf, sizeof(buf), "Résolution : %.2f × fenêtre", a.renderScale);
-        notify(a, buf);
-        break;
-    case 'v': case 'V':
-        a.lensing = !a.lensing;
-        notify(a, std::string("Lentille gravitationnelle : ") + onOff(a.lensing));
-        break;
-    case 'e': case 'E':
-        setStarMode(a, !a.starMode);
-        if (a.starMode) std::cout << a.star.summary() << "\n";
-        notify(a, a.starMode ? "Étoile : " + a.star.name : std::string("Trou noir"));
-        break;
-    case 'n': case 'N': case 'b': case 'B':
-        setStarMode(a, true);
-        selectPreset(a, a.starIndex + ((c == 'n' || c == 'N') ? 1 : -1));
-        notify(a, a.star.name);
-        break;
-    case 'i': case 'I': case 'u': case 'U':
-        setStarMode(a, true);
-        selectMainSequence(a, (c == 'i' || c == 'I') ? a.star.mass * 1.25 : a.star.mass / 1.25);
-        std::snprintf(buf, sizeof(buf), "Étoile de %.3g masses solaires", a.star.mass);
-        notify(a, buf);
-        break;
-    case 'j': case 'J':
-        a.jets = !a.jets;
-        notify(a, a.starMode ? std::string("Jets : ") + onOff(a.jets) + " (visibles autour du trou noir, touche E)"
-                             : std::string("Jets relativistes : ") + onOff(a.jets));
-        break;
-    case 'f': case 'F':
-        a.asteroids.addField(centralBody(a), a.field);
-        std::snprintf(buf, sizeof(buf), "Champ de %d astéroïdes ajouté", a.field.count);
-        notify(a, buf);
-        break;
-    case 'g': case 'G': {
-        double r = 0.5 * (a.field.innerRadius + a.field.outerRadius);
-        a.asteroids.addOrbit(centralBody(a), r, 1.0, 0.0, 0.0, 5.0f);
-        notify(a, "Astéroïde ajouté");
+    case 'h': case 'H': app->showDisk = !app->showDisk; break;
+    case 'r': case 'R': app->reloadRequested = true; break;
+    case 'p': case 'P': app->paused = !app->paused; break;
+    case 'c': case 'C': {
+        bool autoOrbit = app->camera.autoOrbit;
+        app->camera = OrbitCamera{};
+        app->camera.autoOrbit = autoOrbit;
         break;
     }
-    case 'm': case 'M':
-        if (a.starMode && computeCorona(a.star, computeActivity(a.star)).active) {
-            double days = starDays(a);
-            a.corona.launchCme(a.star, computeActivity(a.star), days, starRotationAngle(a.star, days));
-            notify(a, "Éjection de masse coronale !");
-        } else {
-            notify(a, "M : éjection de masse coronale (étoile active seulement)");
-        }
+    case '+': app->simSpeed = std::min(app->simSpeed * 1.5f, 200.0f); break;
+    case '-': app->simSpeed = std::max(app->simSpeed / 1.5f, 0.25f); break;
+    case 'o': case 'O': app->autoScale = !app->autoScale; break;
+    case 'k': case 'K':
+        app->autoScale = false;
+        app->renderScale = std::max(kMinScale, app->renderScale - 0.05f);
         break;
-    case 'x': case 'X':
-        a.asteroids.clear();
-        notify(a, "Astéroïdes retirés");
+    case 'l': case 'L':
+        app->autoScale = false;
+        app->renderScale = std::min(kMaxScale, app->renderScale + 0.05f);
         break;
     default: break;
     }
@@ -793,7 +399,6 @@ void onChar(GLFWwindow* window, unsigned int c)
 // ZQSD / WASD sont lues par position physique (GLFW_KEY_W = Z en AZERTY).
 void handleHeldKeys(GLFWwindow* window, App& app, float dt)
 {
-    if (uiWantsKeyboard()) return;
     auto down = [&](int k) { return glfwGetKey(window, k) == GLFW_PRESS; };
     const float accel = 6.0f * dt;   // vitesse cible ~1,2 rad/s
     OrbitCamera& cam = app.camera;
@@ -825,7 +430,7 @@ bool writePPM(const std::string& path, int w, int h)
 
 // Rendu hors écran : une image enregistrée en PPM (--screenshot), ou N images
 // chronométrées (--bench).
-int renderOffscreen(const Programs& prog, GLuint vao, GLuint skyTex, App& app, int w, int h,
+int renderOffscreen(const Programs& prog, GLuint vao, GLuint skyTex, const App& app, int w, int h,
                     const std::string& path, int benchFrames)
 {
     GLuint tex = 0, fbo = 0;
@@ -847,18 +452,13 @@ int renderOffscreen(const Programs& prog, GLuint vao, GLuint skyTex, App& app, i
 
     int frames = std::max(1, benchFrames);
     // Une image de chauffe (compilation paresseuse des shaders par le pilote).
-    const double t0 = app.simTime;
-    if (app.starMode) {
-        // Simule les éruptions des 20 dernières secondes pour l'image.
-        for (int i = 200; i >= 0; --i)
-            updateStarActivity(app, t0 - i * 1.0);
-    }
-    traceScene(prog, vao, skyTex, target, app, t0);
+    const float t0 = float(app.simTime);
+    traceFrame(prog, vao, skyTex, target, app.camera, t0, app.showDisk);
     glFinish();
     auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < frames; ++i) {
-        traceScene(prog, vao, skyTex, target, app, t0 + i * app.simSpeed / 60.0);
-        presentFrame(prog, vao, target, fbo, w, h, app.exposure);
+        traceFrame(prog, vao, skyTex, target, app.camera, t0 + i * app.simSpeed / 60.0f, app.showDisk);
+        presentFrame(prog, vao, target, fbo, w, h);
         glFinish();
     }
     double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
@@ -869,8 +469,8 @@ int renderOffscreen(const Programs& prog, GLuint vao, GLuint skyTex, App& app, i
                   << ms / frames << " ms par image (" << 1000.0 * frames / ms << " FPS)\n";
     }
     if (!path.empty()) {
-        traceScene(prog, vao, skyTex, target, app, t0);
-        presentFrame(prog, vao, target, fbo, w, h, app.exposure);
+        traceFrame(prog, vao, skyTex, target, app.camera, t0, app.showDisk);
+        presentFrame(prog, vao, target, fbo, w, h);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         if (!writePPM(path, w, h)) code = EXIT_FAILURE;
     }
@@ -888,7 +488,7 @@ int renderOffscreen(const Programs& prog, GLuint vao, GLuint skyTex, App& app, i
 struct AutoResolution {
     GLuint query = 0;
     bool pending = false;
-    float lastMs = 0.0f;   // dernier temps GPU mesuré
+    double budgetMs = 1000.0 / 30.0;
 
     void begin()
     {
@@ -913,12 +513,9 @@ struct AutoResolution {
         GLuint64 ns = 0;
         glGetQueryObjectui64v(query, GL_QUERY_RESULT, &ns);
         pending = false;
-        lastMs = float(ns / 1.0e6);
         if (!app.autoScale) return;
+
         double ms = std::max(0.1, ns / 1.0e6);
-        // 85 % de la durée d'une image pour le ray tracing, le reste pour
-        // l'affichage, le panneau et la synchronisation.
-        double budgetMs = 0.85 * 1000.0 / app.targetFps;
         float ideal = app.renderScale * float(std::sqrt(budgetMs / ms));
         // Lissé pour éviter que la résolution ne "pompe".
         app.renderScale += 0.15f * (ideal - app.renderScale);
@@ -935,9 +532,8 @@ int main(int argc, char** argv)
     int benchFrames = 0;
     int width = 1280, height = 720;
     float fixedScale = -1.0f;
+    double targetFps = 30.0;
     int skySize = 1024;
-    int fieldCount = 0;
-    double advance = 0.0;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         bool hasValue = i + 1 < argc;
@@ -946,38 +542,15 @@ int main(int argc, char** argv)
         else if (arg == "--width" && hasValue) width = std::max(16, std::atoi(argv[++i]));
         else if (arg == "--height" && hasValue) height = std::max(16, std::atoi(argv[++i]));
         else if (arg == "--scale" && hasValue) fixedScale = float(std::atof(argv[++i]));
-        else if (arg == "--fps" && hasValue) app.targetFps = float(std::max(5.0, std::atof(argv[++i])));
+        else if (arg == "--fps" && hasValue) targetFps = std::max(5.0, std::atof(argv[++i]));
         else if (arg == "--sky" && hasValue) skySize = std::clamp(std::atoi(argv[++i]), 128, 4096);
         else if (arg == "--no-disk") app.showDisk = false;
-        else if (arg == "--no-lensing") app.lensing = false;
         else if (arg == "--time" && hasValue) app.simTime = std::atof(argv[++i]);
         else if (arg == "--yaw" && hasValue) app.camera.yaw = float(std::atof(argv[++i]));
         else if (arg == "--pitch" && hasValue) app.camera.pitch = float(std::atof(argv[++i]));
         else if (arg == "--distance" && hasValue)
             app.camera.distance = app.camera.targetDistance = float(std::atof(argv[++i]));
         else if (arg == "--shaders" && hasValue) shaderDir = argv[++i];
-        else if (arg == "--star" && hasValue) { setStarMode(app, true); selectPreset(app, std::atoi(argv[++i])); }
-        else if (arg == "--mass" && hasValue) { setStarMode(app, true); selectMainSequence(app, std::atof(argv[++i])); }
-        else if (arg == "--rotation" && hasValue) { app.star.rotationDays = std::max(std::atof(argv[++i]), 1e-5); app.starIndex = -1; }
-        else if (arg == "--quasar") applyQuasar(app);
-        else if (arg == "--binary") applyBinary(app);
-        else if (arg == "--bh-mass" && hasValue) app.massSolar = float(std::atof(argv[++i]));
-        else if (arg == "--field" && hasValue) fieldCount = std::max(0, std::atoi(argv[++i]));
-        else if (arg == "--advance" && hasValue) advance = std::atof(argv[++i]);
-    }
-    if (app.starMode || app.jets || app.binary.settings.enabled) app.camera.distance = app.camera.targetDistance;
-    if (fieldCount > 0) {
-        app.field.count = fieldCount;
-        app.asteroids.addField(centralBody(app), app.field);
-    }
-    // Avance par pas de 1/60 s à vitesse x10, comme dans la fenêtre.
-    for (double t = 0.0; t < advance; t += sceneDt(app, 1.0 / 60.0))
-        app.asteroids.step(centralBody(app), sceneDt(app, 1.0 / 60.0));
-    if (advance > 0.0) {
-        const AsteroidStats& st = app.asteroids.stats;
-        std::cout << app.asteroids.items.size() << " astéroïdes | avalés " << st.swallowed << " | écrasés "
-                  << st.impacts << " | disloqués " << st.disrupted << " | vaporisés " << st.vaporized
-                  << " | éjectés " << st.ejected << "\n";
     }
     const bool offscreen = !screenshotPath.empty() || benchFrames > 0;
 
@@ -1039,9 +612,6 @@ int main(int argc, char** argv)
 
     if (offscreen) {
         int code = renderOffscreen(prog, vao, skyTex, app, width, height, screenshotPath, benchFrames);
-        asteroidGfx.destroy();
-        destroyBinaryGfx();
-        prog.destroy();
         glfwTerminate();
         return code;
     }
@@ -1052,15 +622,16 @@ int main(int argc, char** argv)
     glfwSetScrollCallback(window, onScroll);
     glfwSetKeyCallback(window, onKey);
     glfwSetCharCallback(window, onChar);
-    uiInit(window);   // après nos callbacks : ImGui les enchaîne
 
     TraceTarget target;
     AutoResolution autoRes;
+    // 85 % de la durée d'une image pour le ray tracing, le reste pour
+    // l'affichage et la synchronisation.
+    autoRes.budgetMs = 0.85 * 1000.0 / targetFps;
 
     double lastFrame = glfwGetTime();
     double fpsTimer = lastFrame;
     int frames = 0;
-    UiStats stats;
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
@@ -1083,18 +654,8 @@ int main(int argc, char** argv)
 
         handleHeldKeys(window, app, dt);
         app.camera.update(dt, app.dragging);
-        if (!app.paused) {
+        if (!app.paused)
             app.simTime += double(dt) * app.simSpeed;
-            app.asteroids.step(centralBody(app), sceneDt(app, dt));
-        } else if (app.stepRequests > 0) {
-            // Pas à pas (touche T) : 1/30 s de simulation à la vitesse choisie.
-            for (; app.stepRequests > 0; --app.stepRequests) {
-                app.simTime += app.simSpeed / 30.0;
-                app.asteroids.step(centralBody(app), sceneDt(app, 1.0 / 30.0));
-            }
-        }
-        if (app.starMode)
-            updateStarActivity(app, app.simTime);
 
         int fbW, fbH;
         glfwGetFramebufferSize(window, &fbW, &fbH);
@@ -1110,37 +671,25 @@ int main(int argc, char** argv)
         target.resize(tw, th);
 
         autoRes.begin();
-        traceScene(prog, vao, skyTex, target, app, app.simTime);
+        traceFrame(prog, vao, skyTex, target, app.camera, float(app.simTime), app.showDisk);
         autoRes.end();
-        presentFrame(prog, vao, target, 0, fbW, fbH, app.exposure);
-
-        stats.traceWidth = tw;
-        stats.traceHeight = th;
-        stats.gpuMs = autoRes.lastMs;
-        uiDraw(app, stats);
+        presentFrame(prog, vao, target, 0, fbW, fbH);
 
         glfwSwapBuffers(window);
 
         ++frames;
         if (now - fpsTimer >= 1.0) {
-            char title[320];
+            char title[200];
             std::snprintf(title, sizeof(title),
                           "Trou noir - ray tracing | %d FPS | rendu %dx%d%s | temps x%.2g%s | distance %.1f rs",
                           frames, tw, th, app.autoScale ? " (auto)" : "", app.simSpeed,
                           app.paused ? " (pause)" : "", app.camera.distance);
-            if (app.starMode)
-                std::snprintf(title, sizeof(title), "%s | %d FPS | rendu %dx%d%s", app.star.summary().c_str(),
-                              frames, tw, th, app.autoScale ? " (auto)" : "");
             glfwSetWindowTitle(window, title);
-            stats.fps = frames;
             frames = 0;
             fpsTimer = now;
         }
     }
 
-    uiShutdown();
-    asteroidGfx.destroy();
-    destroyBinaryGfx();
     target.destroy();
     glDeleteQueries(1, &autoRes.query);
     glDeleteTextures(1, &skyTex);
