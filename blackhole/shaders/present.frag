@@ -6,13 +6,12 @@
 
 uniform sampler2D uImage;
 uniform vec2      uOutputSize;   // taille de la fenêtre en pixels
-uniform float     uExposure;     // luminosité globale (1 = normale)
 
 out vec4 FragColor;
 
 void main()
 {
-    vec3 color = texture(uImage, gl_FragCoord.xy / uOutputSize).rgb * uExposure;
+    vec3 color = texture(uImage, gl_FragCoord.xy / uOutputSize).rgb;
 
     // Tone mapping (ACES approché) + correction gamma.
     color = (color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14);

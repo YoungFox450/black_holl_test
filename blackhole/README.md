@@ -23,8 +23,6 @@ blackhole/
 │   └── present.frag       agrandit l'image + tone mapping
 └── src/
     ├── main.cpp           fenêtre, caméra orbitale, boucle de rendu
-    ├── activity.cpp/.hpp  activité des étoiles (taches, cycle, éruptions)
-    ├── ui_activity.cpp    cartes « activité » du panneau
     └── shader.cpp/.hpp    compilation des shaders
 ```
 
@@ -112,141 +110,6 @@ Unités : `G = c = 1`, et le rayon de Schwarzschild `rs = 2GM/c² = 1`.
      donc un amas brille fort quand il arrive vers nous et s'éteint en
      repartant.
 
-## Simuler des étoiles
-
-La touche `E` remplace le trou noir par une étoile, rendue par le même ray
-tracer (`shaders/star.frag`). Chaque étoile est définie par sa masse, son
-rayon et sa température ; tout le reste est calculé par des lois physiques
-dans `src/star.cpp` :
-
-![Étoiles](docs/etoiles.jpg)
-
-*De gauche à droite et de haut en bas : Soleil, Proxima du Centaure,
-Sirius A, Rigel, Bételgeuse, Aldébaran, Sirius B (naine blanche), étoile à
-neutrons, naine rouge de 0,3 M☉ (calculée à partir de sa seule masse).*
-
-| Grandeur | Modèle |
-|---|---|
-| Luminosité | Stefan-Boltzmann : `L = R² (T / 5772 K)⁴` (en L☉) |
-| Séquence principale | relation masse-luminosité `L ∝ M^2,3 … M^4 … M^3,5` et masse-rayon `R ∝ M^0,8` (M < 1) ou `M^0,57` ; T déduite de L et R |
-| Naine blanche | relation masse-rayon de Nauenberg (électrons dégénérés) : plus lourde = plus petite |
-| Couleur | corps noir à la température effective |
-| Bord plus sombre | assombrissement centre-bord `I(μ) = 1 − u (1 − μ)`, u plus fort pour les étoiles froides |
-| Granulation | cellules de convection, taille ∝ échelle de hauteur `T / g` : quelques cellules géantes sur Bételgeuse, d'innombrables sur une naine |
-| Taches, éruptions, cycle | voir « Activité des étoiles » ci-dessous |
-| Relativité | rayons courbés par la gravité avec `rs / R = 2GM / (c² R)` : invisible pour le Soleil, très net pour l'étoile à neutrons (on voit une partie de son arrière), plus le décalage gravitationnel vers le rouge |
-
-Les distances de la caméra sont en rayons de l'étoile : toutes les étoiles
-apparaissent à la même taille, le titre de la fenêtre donne leurs vraies
-masse, rayon, température, luminosité et type spectral.
-
-Pour ajouter une étoile, il suffit d'ajouter une ligne dans
-`starPresets()` (`src/star.cpp`), ou d'utiliser `mainSequenceStar(masse)` /
-`whiteDwarf(masse, température)`.
-
-## Activité des étoiles
-
-L'activité magnétique (taches, facules, cycle, éruptions) et les
-oscillations sont calculées dans `src/activity.cpp` à partir de la masse,
-du rayon, de la température et de la **rotation** de l'étoile, par des lois
-empiriques publiées. Il n'y a plus de réglage « activité » : elle découle
-de la rotation, comme pour les vraies étoiles.
-
-![Activité](docs/activite.jpg)
-
-*Le Soleil près du maximum de son cycle (taches aux latitudes moyennes) et
-Proxima du Centaure pendant une éruption.*
-
-| Effet | Modèle |
-|---|---|
-| Dynamo | seulement si l'enveloppe est convective (T < ~6 700 K, cassure de Kraft). Sirius A et Rigel n'ont ni taches ni éruptions |
-| Rotation → activité | nombre de Rossby `Ro = P_rot / τ_c`, avec `log τ_c = 2,33 − 1,50 M + 0,31 M²` (Wright 2018), ~150 j pour les géantes ; `L_X / L_bol = 10^-3,13 (Ro / 0,13)^-2,7`, plafonné sous Ro = 0,13 (Wright 2011) |
-| Rotation des étoiles créées | gyrochronologie à 4,6 milliards d'années, `P = 0,7725 (B−V − 0,4)^0,601 t^0,519` (Barnes 2007) : 27 j pour 1 M☉, ~95 j pour une naine M |
-| Surface tachée | `f = 0,4 (L_X / L_X,sat)^0,84`, calé entre le Soleil (~0,1 %) et les naines M saturées (~40 %) |
-| Taches | ombre et pénombre, `ΔT ≈ 0,6 T − 1780 K` (Berdyugina 2005), brillance `(T_tache / T)⁴` ; durée de vie de Gnevyshev-Waldmeier (~30 j) |
-| Facules | aire `0,55 √f`, contraste nul au centre et ~15 % au bord |
-| Cycle | période `≈ 158 P_rot` (11 ans pour le Soleil, Böhm-Vitense 2007), forme de Hathaway (1994) ; absent pour les étoiles saturées |
-| Diagramme papillon | loi de Spörer `λ = 28° exp(−t / 90 mois)` (Hathaway 2011), le cycle suivant commence à haute latitude pendant que le précédent finit à l'équateur ; taches vers les pôles pour les rotateurs rapides |
-| Rotation différentielle | `Ω(λ) = Ω_eq (1 − α sin² λ)`, `ΔΩ = 0,073 rad/j (T / 5772 K)^8,6` (Collier Cameron 2007) |
-| Éruptions | processus de Poisson, fréquence ∝ L_X (calée sur GJ 1243), énergies `dN/dE ∝ E^-2`, profil de Davenport (2014), plasma à 9 000 K : `L_pic = E / (1,827 t½)`, `t½ ∝ E^0,39` |
-| Oscillations | `ν_max = 3090 µHz (g/g☉)(T/T☉)^-½`, `Δν = 135 µHz √ρ`, `δL/L = 4,7 ppm (L/M)^0,8` (Kjeldsen & Bedding 1995) : ~100 jours et 0,5 % pour Bételgeuse |
-
-| Étoile | Ro | Surface tachée | Cycle | Éruptions / jour |
-|---|---|---|---|---|
-| Soleil | 1,8 | 0,1 % | 11 ans | 0,01 |
-| Proxima du Centaure | 0,6 | 1,3 % | 36 ans | 0,2 |
-| Aldébaran | 3,5 | 0,02 % | 225 ans | 0,002 |
-| Bételgeuse | 240 | ~0 | — | ~0 |
-| Sirius A, Rigel | — | aucune (enveloppe radiative) | — | — |
-
-Échelle de temps : 1 seconde affichée = 2 jours (vitesse x10). Les
-éruptions, qui durent quelques minutes, sont montrées au ralenti ; seules
-les plus grosses sont affichées quand l'étoile en produit beaucoup.
-
-Limites connues : le cycle de Proxima mesuré est de ~7 ans (le modèle
-donne 36 ans : les naines M entièrement convectives ne suivent pas la
-relation des étoiles de type solaire), et les supergéantes chaudes comme
-Rigel ont des pulsations propres non modélisées.
-
-### Couronne, protubérances, éjections et vent
-
-Calculés dans `src/corona.cpp` à partir de l'activité (rayons X, taches,
-cycle, rotation), dessinés sans pas d'intégration dans `shaders/star.frag`.
-Panneau : cartes « Couronne et vent » et « Protubérances et éjections ».
-Touche `M` : une protubérance éclate et lance une éjection de masse coronale.
-
-![Couronne et éjection](docs/couronne.jpg)
-
-*Le Soleil : couronne avec ses jets, une éjection de masse coronale (front
-brillant, cavité, cœur rose) et une petite protubérance au bord.*
-
-| Effet | Modèle |
-|---|---|
-| Couronne | flux X `F_X = (L_X/L_bol) σT⁴`, température `T = 0,11 F_X^0,26` MK (Johnstone & Güdel 2015) : 1,7 MK pour le Soleil, ~10 MK pour une naine très active ; lumière de l'étoile diffusée par les électrons (densité en r⁻⁴) ; jets coronaux équatoriaux au minimum du cycle, couronne ronde au maximum. Renforcée pour être visible (en vrai un millionième de la surface) |
-| Ligne de partage coronale | les géantes plus froides que ~K3 (Bételgeuse, Aldébaran) n'ont pas de couronne chaude (Linsky & Haisch 1979) |
-| Vent | naines : vent de Parker isotherme, `Ṁ ∝ R² F_X^1,34` (Wood 2005), réduit au-delà de F_X = 10⁶ ; géantes froides : loi de Reimers `Ṁ = 2·10⁻¹³ L R / M` ; étoiles chaudes : vent poussé par la lumière, `v∞ = 2,6 v_esc` (Lamers 1995) |
-| Protubérances | de 1 à 6 selon l'aire tachée ; rideaux calmes (hauts, longs, des semaines), arches actives au-dessus des taches (quelques jours), « couronne polaire » ; roses au bord (raie Hα), filaments sombres devant le disque |
-| Nuages en corotation | si le rayon de corotation `(G M P² / 4π²)^1/3` est à moins de 6 rayons (rotateurs rapides comme AB Doradus), nuages froids piégés qui tournent avec l'étoile puis sont éjectés (Collier Cameron & Robinson 1989) |
-| Éjections de masse coronale | ~2,5 par jour pour le Soleil (Yashiro 2004), ∝ F_X^0,7 ; 60 % viennent d'une protubérance qui éclate (« disparition brusque ») ; structure en 3 parties ; vitesses log-normales, médiane ~450 km/s ; une partie retombe sur les étoiles très actives (confinement, Alvarado-Gómez 2018) |
-
-| Étoile | Couronne | Vent | Perte de masse | CME / jour |
-|---|---|---|---|---|
-| Soleil | 1,7 MK | 600 km/s (Parker) | 2·10⁻¹⁴ M☉/an | 2,5 |
-| Proxima du Centaure | 1,9 MK | 820 km/s | 10⁻¹⁵ M☉/an | 0,09 |
-| AB Dor (P = 0,51 j) | 9,9 MK | 1 700 km/s | 10⁻¹³ M☉/an | 226 (25 % s'échappent) |
-| Bételgeuse | aucune | 18 km/s (Reimers) | 8·10⁻⁷ M☉/an | — |
-| Rigel | aucune | 830 km/s (lumière) | 10⁻⁶ M☉/an | — |
-
-Échelle de temps : une éjection met des heures à quitter l'étoile, ici
-quelques secondes ; au plus une est montrée toutes les 8 s affichées.
-
-## Système double
-
-Une étoile compagne tourne autour du trou noir et le trou noir lui arrache
-son gaz, comme dans les binaires X (Cygnus X-1, A0620-00). Panneau :
-onglet Objet, carte « Système double » ; ligne de commande : `--binary`.
-
-![Système double](docs/binaire.jpg)
-
-*À gauche, l'étoile étirée en goutte par la marée et le jet de gaz qui part
-du point L1 vers le disque. À droite, l'étoile passe derrière le trou noir :
-sa lumière, déviée, forme un anneau d'Einstein autour de l'ombre.*
-
-| Effet | Modèle |
-|---|---|
-| Orbite | circulaire dans le plan du disque, `Ω² = G (M + m) / a³` |
-| Lobe de Roche | formule d'Eggleton `rL / a = 0,49 q^⅔ / (0,6 q^⅔ + ln(1 + q^⅓))` |
-| Forme de l'étoile | ellipsoïde de même volume dont la pointe atteint L1 quand l'étoile remplit son lobe |
-| Point L1 | équilibre des deux gravités et de la force centrifuge, cherché par dichotomie |
-| Jet de gaz | paquets lâchés en L1 avec la rotation de l'orbite, soumis au trou noir (Paczyński-Wiita), à l'étoile et au mouvement du trou noir autour du centre de masse ; ils s'arrêtent sur le bord du disque |
-| Surface | assombrissement centre-bord, assombrissement gravitationnel vers L1 (von Zeipel), face chauffée par les rayons X du disque, rotation synchrone |
-| Lumière | l'étoile est dans le ray tracer : lentille gravitationnelle, effet Doppler de l'orbite, décalage gravitationnel |
-
-Les distances sont rapprochées : dans Cygnus X-1, 0,2 UA séparent les deux
-astres alors que l'horizon fait 60 km. Les rapports de masse, la taille des
-lobes et la position de L1 sont les vrais. Le disque est borné à 80 % du
-lobe du trou noir.
-
 ## Installer les outils
 
 - **VS Code** avec les extensions recommandées (VS Code les propose à
@@ -278,65 +141,6 @@ cmake --build build --config Release
 ./build/bin/blackhole
 ```
 
-## Panneau de contrôle
-
-Un panneau (Dear ImGui, police Inter) occupe le bord gauche ; `F1`, `Tab`
-ou la croix le cachent, et la pastille qui reste en haut à gauche le rouvre.
-
-![panneau de contrôle](docs/panneau.jpg)
-![panneau en mode étoile](docs/panneau-etoile.jpg)
-
-De haut en bas :
-
-- **Lecture / pause** et **vitesse du temps**, toujours visibles, avec le
-  temps écoulé (en rs/c et en temps réel pour la masse choisie).
-- **Scène** : trou noir ou étoile (`E`).
-- **Onglet Objet** :
-  - trou noir : masse en masses solaires. L'image ne change pas (tout est
-    calculé en rs), mais le panneau donne les vraies grandeurs : horizon,
-    sphère de photons, dernière orbite stable, durée d'un tour ;
-  - disque d'accrétion : bords intérieur et extérieur, température,
-    luminosité, amas chauds, et interrupteurs pour couper l'effet Doppler ou
-    le décalage gravitationnel ;
-  - étoile : étoile connue (Soleil, Proxima du Centaure, Sirius A et B,
-    Rigel, Bételgeuse, Aldébaran, étoile à neutrons), création d'une étoile
-    comme le Soleil ou d'une naine blanche à partir de sa masse, réglages
-    fins, et ce que la physique en déduit (luminosité, gravité, compacité) ;
-  - activité de l'étoile (`src/ui_activity.cpp`) : nombre de Rossby,
-    rayons X, rotation différentielle, phase du cycle (réglable), surface
-    tachée, latitude des taches, éruptions en cours, oscillations.
-- **Onglet Vue** : distance, angles, champ de vision, orbite automatique
-  (et sa vitesse), sensibilité de la souris ; carte Simulation
-  (`src/ui_simulation.cpp`) : lentille gravitationnelle à couper pour
-  comparer, pause et avance pas à pas.
-- **Onglet Rendu** : résolution (auto ou fixe), FPS visé, pas max par rayon,
-  mesures, exposition, luminosité du fond de galaxie, taille d'affichage des
-  astéroïdes, rechargement des shaders.
-- **Onglet Touches** (`src/ui_keys.cpp`) : chaque touche, rangée par thème
-  (caméra, temps, scène, trou noir, astéroïdes, rendu), avec une recherche.
-  Les touches actives dans la scène affichée sont entourées d'orange, les
-  autres sont grisées avec la scène où elles servent. Chaque touche affiche
-  aussi un message bref en bas de l'écran (« Jets relativistes : oui »).
-- **Jets** : puissance, vitesse du plasma et largeur.
-- **Astéroïdes** : marées et fonte peuvent être coupées, vitesse de fonte
-  réglable. Autour d'une étoile à neutrons (pulsar, magnétar), la limite de
-  Roche de la roche est à ~800 000 km, soit ~70 000 fois le rayon de
-  l'étoile : tout astéroïde posé près d'elle est brisé aussitôt en 6
-  morceaux, puis la surface à 1 million de K les chauffe à plusieurs
-  centaines de milliers de K et ils fondent en une vingtaine de secondes.
-  C'est la vraie physique ; couper les marées et la fonte permet de les
-  garder en orbite.
-- **Ligne d'état** : FPS (vert, orange ou rouge selon l'objectif),
-  résolution du calcul, temps GPU.
-
-Chaque réglage a une bulle d'aide (le petit `?`) ; `Ctrl + clic` sur un
-curseur permet de taper une valeur.
-
-Pour ajouter une section au panneau depuis un autre fichier, voir l'exemple
-en tête de `src/ui_kit.hpp` (macros `UI_SECTION` et `UI_SCENE`).
-
-Quand la souris est sur le panneau, elle ne fait pas tourner la caméra.
-
 ## Commandes
 
 Les lettres marchent en AZERTY comme en QWERTY.
@@ -349,22 +153,11 @@ Les lettres marchent en AZERTY comme en QWERTY.
 | `Espace` | orbite automatique de la caméra |
 | `C` | recentrer la caméra |
 | `P` | pause de la simulation |
-| `T` | pendant la pause : avancer d'un pas de temps |
 | `+` / `-` | accélérer / ralentir le temps |
 | `H` | afficher / cacher le disque d'accrétion |
 | `K` / `L` | baisser / augmenter la résolution du rendu (passe en mode fixe) |
 | `O` | résolution automatique (activée au démarrage) |
 | `R` | recharger les shaders (modifier `blackhole.frag`, sauvegarder, `R`) |
-| `E` | passer du trou noir à une étoile, et retour |
-| `N` / `B` | étoile suivante / précédente de la liste |
-| `I` / `U` | étoile de la séquence principale plus / moins massive (×1,25) |
-| `J` | jets relativistes du trou noir (quasar) |
-| `M` | éjection de masse coronale (étoile active) |
-| `V` | lentille gravitationnelle (la couper : la lumière va tout droit) |
-| `F` | ajouter un champ d'astéroïdes (réglages du panneau) |
-| `G` | ajouter un astéroïde en orbite circulaire |
-| `X` | retirer tous les astéroïdes |
-| `F1` ou `Tab` | afficher / cacher le panneau de contrôle |
 | `Échap` | quitter |
 
 La barre de titre affiche les FPS, la résolution du rendu, la vitesse du
@@ -378,17 +171,9 @@ Options :
 | `--scale S` | résolution fixe, fraction de la fenêtre (0.25 à 1) |
 | `--sky N` | taille d'une face du ciel (1024 ; 512 si la mémoire manque) |
 | `--bench N` | rend N images hors écran et affiche le temps moyen |
-| `--star N` | démarre sur l'étoile n° N (0 Soleil, 1 Proxima, 2 Sirius A, 3 Rigel, 4 Bételgeuse, 5 Aldébaran, 6 Sirius B, 7 étoile à neutrons, 8 pulsar du Crabe, 9 pulsar milliseconde PSR J0437-4715, 10 magnétar SGR 1806-20) |
-| `--rotation D` | période de rotation de l'étoile en jours (après `--star` ou `--mass`) |
-| `--mass M` | démarre sur une étoile de la séquence principale de M masses solaires |
-| `--quasar` | trou noir supermassif, disque très chaud et jets relativistes |
-| `--binary` | système double : étoile compagne dont le gaz est arraché |
-| `--bh-mass M` | masse du trou noir en masses solaires (change la limite de Roche des astéroïdes) |
-| `--field N` | ajoute un champ de N astéroïdes |
-| `--advance T` | fait avancer les astéroïdes de T unités de temps avant l'image (rs/c, ou secondes pour une étoile) |
 
 Image fixe sans fenêtre (pleine résolution) :
-`blackhole --screenshot rendu.ppm --width 1920 --height 1080 [--no-disk] [--no-lensing] [--time T] [--yaw A] [--pitch A] [--distance D]`
+`blackhole --screenshot rendu.ppm --width 1920 --height 1080 [--no-disk] [--time T] [--yaw A] [--pitch A] [--distance D]`
 
 ## Pistes pour la suite
 

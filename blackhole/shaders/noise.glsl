@@ -18,8 +18,7 @@ vec3 hash33(vec3 p)
     return fract((p.xxy + p.yxx) * p.zyx);
 }
 
-// Pas "noise3" : c'est une fonction intégrée de GLSL (vec3 noise3), et le
-// pilote Intel sous Windows refuse de la redéfinir avec un autre type.
+// Pas "noise3" : c'est une fonction intégrée de GLSL, refusée par le pilote Intel HD 620.
 float valueNoise(vec3 p)
 {
     vec3 i = floor(p);
