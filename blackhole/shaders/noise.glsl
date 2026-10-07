@@ -18,7 +18,8 @@ vec3 hash33(vec3 p)
     return fract((p.xxy + p.yxx) * p.zyx);
 }
 
-float noise3(vec3 p)
+// Pas "noise3" : c'est une fonction intégrée de GLSL, refusée par le pilote Intel HD 620.
+float valueNoise(vec3 p)
 {
     vec3 i = floor(p);
     vec3 f = fract(p);
@@ -34,7 +35,7 @@ float fbm(vec3 p, int octaves)
 {
     float v = 0.0, a = 0.5;
     for (int i = 0; i < octaves; ++i) {
-        v += a * noise3(p);
+        v += a * valueNoise(p);
         p = p * 2.03 + 17.1;
         a *= 0.5;
     }
