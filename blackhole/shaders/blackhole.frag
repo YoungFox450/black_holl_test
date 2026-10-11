@@ -52,6 +52,11 @@ uniform float uJetBeta;         // vitesse du plasma des jets (fraction de c)
 uniform float uJetWidth;        // largeur relative des jets (1 = normale)
 uniform float uLensing;         // 1 = la gravité courbe la lumière, 0 = lignes droites
 uniform float uSkyGain;         // luminosité du fond de galaxie
+uniform float uLightDelay;      // 1 = on voit le disque tel qu'il était quand la lumière est partie
+uniform float uObsShift;        // décalage vers le bleu reçu par la caméra : 1 / sqrt(1 - rs / r_caméra)
+uniform float uPlunge;          // 1 = gaz qui plonge sous l'ISCO
+uniform float uGuides;          // 1 = repères : sphère de photons et ISCO
+uniform vec2  uJitter;          // décalage sous-pixel (image lissée en pause)
 
 const float RS         = 1.0;   // rayon de Schwarzschild (horizon)
 const float ESCAPE_R   = 60.0;  // au-delà, le rayon est considéré libre
@@ -152,11 +157,14 @@ float diskClumps(float r, float phi, float t)
 //  rayDir : direction de propagation du rayon (de la caméra vers la scène)
 //  Retourne couleur (rgb) et opacité (a).
 // -----------------------------------------------------------------------------
-vec4 accretionDisk(vec3 p, vec3 rayDir)
+vec4 plungingGas(float r, float phi, vec3 rayDir, float tEmit);
+
+vec4 accretionDisk(vec3 p, vec3 rayDir, float tEmit)
 {
     float r = length(p.xz);
-    if (r < uDiskIn || r > uDiskOut) return vec4(0.0);
+    if (r > uDiskOut) return vec4(0.0);
     float phi = atan(p.z, p.x);
+    if (r < uDiskIn) return plungingGas(r, phi, rayDir, tEmit);
 
     // Profil de température d'un disque mince (Shakura-Sunyaev) :
     //   T(r) ∝ r^(-3/4) * (1 - sqrt(r_in / r))^(1/4)
@@ -165,8 +173,8 @@ vec4 accretionDisk(vec3 p, vec3 rayDir)
     float T = uDiskTemp * profile / 0.488;  // 0,488 = maximum du profil : T max = uDiskTemp
 
     // Gaz turbulent et amas chauds : plus de matière = plus de chaleur.
-    float turb   = diskTurbulence(r, phi, uTime);
-    float clumps = diskClumps(r, phi, uTime);
+    float turb   = diskTurbulence(r, phi, tEmit);
+    float clumps = diskClumps(r, phi, tEmit);
     float rings  = 0.75 + 0.25 * sin(r * 5.0 + turb * 6.0);
     float heat   = (0.35 + 1.1 * turb * rings) + 2.2 * clumps;
     T *= 0.9 + 0.15 * turb + 0.35 * clumps;
@@ -184,7 +192,9 @@ vec4 accretionDisk(vec3 p, vec3 rayDir)
 
     // Décalage gravitationnel vers le rouge : la lumière perd de l'énergie
     // en sortant du puits de potentiel.
-    float gravShift = mix(1.0, sqrt(1.0 - RS / r), uGravShift);
+    // uObsShift : la caméra, elle aussi dans le puits, reçoit la lumière un
+    // peu plus énergétique (vaut 1 loin du trou noir).
+    float gravShift = mix(1.0, sqrt(1.0 - RS / r), uGravShift) * uObsShift;
 
     float g = doppler * gravShift;
     vec3 color = blackbody(T * g);
@@ -197,6 +207,40 @@ vec4 accretionDisk(vec3 p, vec3 rayDir)
     float alpha = clamp(edge * (0.55 + 0.6 * turb + 0.5 * clumps), 0.0, 1.0);
 
     return vec4(color * intensity * edge, alpha);
+}
+
+// -----------------------------------------------------------------------------
+//  Gaz qui plonge sous l'ISCO
+//
+//  Sous la dernière orbite stable (3 rs), le gaz ne peut plus tourner en
+//  rond : il tombe en spirale vers l'horizon en quelques tours. Il est
+//  moins dense (il va très vite) et rayonne peu : un voile pâle entre le
+//  bord du disque et l'ombre, étiré en spirale, très décalé par la gravité.
+// -----------------------------------------------------------------------------
+vec4 plungingGas(float r, float phi, vec3 rayDir, float tEmit)
+{
+    if (uPlunge < 0.5 || r < 1.05 * RS || uDiskIn < 2.0) return vec4(0.0);
+    float x = (r - RS) / (uDiskIn - RS);           // 0 à l'horizon, 1 à l'ISCO
+    float density = x * x * sqrt(x);               // s'éclaircit en tombant
+    // Spirale : l'angle avance de plus en plus vite en tombant.
+    float spiral = phi + 2.5 * log(r);
+    float turb = diskTurbulence(uDiskIn, spiral, tEmit);
+
+    // Vitesse : orbitale (bornée) + chute ; on garde la partie orbitale pour
+    // le Doppler, la chute est surtout perpendiculaire à la ligne de visée.
+    float beta  = min(sqrt(M / max(r - RS, 1e-3)), 0.85);
+    float gamma = 1.0 / sqrt(1.0 - beta * beta);
+    vec3 orbitDir = vec3(-sin(phi), 0.0, cos(phi));
+    float cosTheta = dot(orbitDir, -normalize(rayDir));
+    float doppler = mix(1.0, 1.0 / (gamma * (1.0 - beta * cosTheta)), uDoppler);
+    float gravShift = mix(1.0, sqrt(max(1.0 - RS / r, 0.0)), uGravShift) * uObsShift;
+    float g = doppler * gravShift;
+
+    float T = uDiskTemp * 0.75;
+    vec3 color = blackbody(T * g);
+    float intensity = pow(g, 4.0) * 0.18 * uDiskBrightness * density * (0.4 + turb);
+    float alpha = clamp(0.35 * density * (0.5 + turb), 0.0, 1.0);
+    return vec4(color * intensity, alpha);
 }
 
 // -----------------------------------------------------------------------------
@@ -319,7 +363,7 @@ vec3 geodesicAccel(vec3 x, float h2)
 void main()
 {
     // Rayon primaire : de la caméra à travers le pixel.
-    vec2 ndc = (gl_FragCoord.xy / uResolution) * 2.0 - 1.0;
+    vec2 ndc = ((gl_FragCoord.xy + uJitter) / uResolution) * 2.0 - 1.0;
     float aspect = uResolution.x / uResolution.y;
     float tanHalf = tan(uFovY * 0.5);
     vec3 dir = normalize(uCamForward
@@ -334,6 +378,7 @@ void main()
     vec3  color = vec3(0.0);
     float alpha = 0.0;           // opacité accumulée (disque semi-transparent)
     bool  captured = false;
+    float travel = 0.0;          // chemin parcouru par la lumière (rs) : retard
     gJetGamma = inversesqrt(1.0 - uJetBeta * uJetBeta);
 
     for (int i = 0; i < uMaxSteps; ++i) {
@@ -367,6 +412,7 @@ void main()
         }
 
         vec3 prev = pos;
+        travel += dt * length(vel);
         if (uLensing < 0.5) {
             // Sans lentille le rayon va tout droit : un pas exact, sans les
             // quatre évaluations de Runge-Kutta (même branche pour tous les
@@ -404,13 +450,27 @@ void main()
 
         // Le rayon a-t-il traversé le plan du disque pendant ce pas ?
         // (Seulement devant l'étoile compagne si elle est sur le segment.)
-        if (uDisk == 1 && prev.y * pos.y < 0.0 && (tComp < 0.0 || prev.y / (prev.y - pos.y) < tComp)) {
+        if ((uDisk == 1 || uGuides > 0.5) && prev.y * pos.y < 0.0
+            && (tComp < 0.0 || prev.y / (prev.y - pos.y) < tComp)) {
             float t = prev.y / (prev.y - pos.y);
             vec3 hit = mix(prev, pos, t);
-            vec4 d = accretionDisk(hit, vel);
-            color += (1.0 - alpha) * d.rgb * d.a;
-            alpha += (1.0 - alpha) * d.a;
-            if (alpha > 0.99) break;
+            if (uGuides > 0.5) {
+                // Repères dans le plan du disque, courbés par la lentille comme
+                // le reste : sphère de photons (1,5 rs) et ISCO (3 rs).
+                float rh = length(hit.xz);
+                float w = 0.025 + 0.004 * rh;
+                color += (1.0 - alpha) * (vec3(0.2, 0.8, 1.0) * (1.0 - smoothstep(0.0, w, abs(rh - PHOTON_R)))
+                                        + vec3(0.3, 1.0, 0.4) * (1.0 - smoothstep(0.0, w, abs(rh - 3.0)))) * 2.0;
+            }
+            if (uDisk == 1) {
+                // Temps d'émission : la lumière a mis "travel" (rs/c) à venir.
+                // L'image secondaire (lumière qui a fait le tour) est donc en
+                // retard sur l'image principale.
+                vec4 d = accretionDisk(hit, vel, uTime - uLightDelay * travel);
+                color += (1.0 - alpha) * d.rgb * d.a;
+                alpha += (1.0 - alpha) * d.a;
+                if (alpha > 0.99) break;
+            }
         }
 
         // L'étoile est opaque : le rayon s'arrête sur sa surface.
@@ -426,6 +486,12 @@ void main()
     // les pixels exécutent la lecture. Les mipmaps lissent le ciel là où la
     // lentille le comprime énormément (près de l'ombre) : pas de scintillement.
     vec3 sky = texture(uSky, vel).rgb * uSkyGain;
+    // Près du trou noir, la caméra reçoit la lumière des étoiles décalée vers
+    // le bleu d'un facteur g = uObsShift : chaque photon a plus d'énergie
+    // (×g), il en arrive plus par seconde (×g) et le spectre glisse vers le
+    // bleu. Luminosité ×g⁴ comme pour le disque, teinte approchée.
+    float lg = log2(uObsShift);
+    sky *= pow(uObsShift, 4.0) * pow(vec3(0.72, 1.0, 1.38), vec3(lg));
 
     if (!captured && alpha < 0.99) {
         // Le rayon s'est échappé : on lit le ciel dans sa direction déviée.

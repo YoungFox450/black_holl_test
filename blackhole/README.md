@@ -113,6 +113,43 @@ Unités : `G = c = 1`, et le rayon de Schwarzschild `rs = 2GM/c² = 1`.
      donc un amas brille fort quand il arrive vers nous et s'éteint en
      repartant.
 
+## Réalisme : effets en plus
+
+Carte « Réalisme » de l'onglet Rendu (`src/ui_realism.cpp`). Chaque effet se
+coupe pour comparer.
+
+- **Retard de la lumière.** Le ray tracer additionne le chemin parcouru par
+  chaque rayon (en rs, donc en rs/c de temps) et lit le disque à l'instant
+  `t - chemin`. La lumière de l'image secondaire (celle qui passe au-dessus
+  de l'ombre après avoir contourné le trou noir) a fait un trajet plus long :
+  ses grumeaux passent en retard sur l'image principale, comme dans la
+  réalité.
+- **Lumière reçue par la caméra.** Une caméra immobile à la distance r est au
+  fond du puits de potentiel : la lumière qui lui arrive de loin est décalée
+  vers le bleu d'un facteur g = 1 / sqrt(1 - rs/r) (1,29 à 2,5 rs, la
+  distance minimale). Le ciel est multiplié par g⁴ (comme le disque :
+  I_obs = g⁴ I_émis) avec une teinte bleuie, et le g du disque inclut ce
+  facteur. Le panneau affiche aussi la dilatation du temps de la caméra :
+  1 s pour elle vaut g secondes pour un observateur lointain.
+- **Gaz sous l'ISCO.** Sous 3 rs aucune orbite circulaire n'est stable : le
+  gaz tombe en spirale en quelques tours. Il est peu dense, donc pâle : un
+  voile de densité ∝ x^2,5 (x = 0 à l'horizon, 1 à l'ISCO), étiré en
+  spirale, avec Doppler et décalage gravitationnel.
+- **Repères.** Cercles dans le plan du disque à 1,5 rs (sphère de photons,
+  bleu) et 3 rs (ISCO, vert). Ils sont tracés par les rayons courbés, donc
+  déformés par la lentille comme le disque.
+- **Halo lumineux.** Les mipmaps de l'image HDR sont des versions floues ;
+  `present.frag` en ajoute deux niveaux, au-dessus d'un seuil, à l'image.
+- **Exposition automatique.** Le dernier niveau de mipmap (1 pixel) est la
+  moyenne de l'image : l'exposition vise une luminance moyenne de 0,12,
+  bornée entre ×0,3 et ×4.
+- **Image lissée en pause.** Caméra et scène immobiles : chaque image est
+  décalée d'une fraction de pixel (suite de Halton 2, 3) et mélangée avec
+  le poids 1/n dans une image RGBA16F (`accumulate.frag`). Après 64 images le
+  ray tracing s'arrête jusqu'au prochain changement.
+- **Capture d'écran** (`F12` ou bouton) : BMP 24 bits dans `captures/`, à
+  côté de l'endroit où le programme est lancé, sans le panneau.
+
 ## Simuler des étoiles
 
 La touche `E` remplace le trou noir par une étoile, rendue par le même ray
@@ -388,6 +425,7 @@ Les lettres marchent en AZERTY comme en QWERTY.
 | `G` | ajouter un astéroïde en orbite circulaire |
 | `X` | retirer tous les astéroïdes |
 | `F1` ou `Tab` | afficher / cacher le panneau de contrôle |
+| `F12` | capture d'écran (BMP dans `captures/`) |
 | `Échap` | quitter |
 
 La barre de titre affiche les FPS, la résolution du rendu, la vitesse du
@@ -416,7 +454,7 @@ Image fixe sans fenêtre (pleine résolution) :
 ## Pistes pour la suite
 
 - Trou noir en rotation (métrique de Kerr) : ombre asymétrique.
-- Rendu progressif / anti-aliasing (plusieurs rayons par pixel).
+- Anti-aliasing aussi pendant le mouvement (accumulation temporelle).
+- Aberration de la caméra en orbite (elle est immobile au sens relativiste).
 - Fond de ciel à partir d'une vraie image HDR de la Voie lactée (il suffit
   de remplir la cubemap avec l'image au lieu de `sky.frag`).
-- Bloom autour du disque.

@@ -67,7 +67,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
+#include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -104,7 +107,7 @@ void findShaderDir(const char* argv0)
 
 // Les trois programmes et leurs uniforms (cherchés une seule fois).
 struct Programs {
-    GLuint sky = 0, trace = 0, present = 0, star = 0, asteroid = 0;
+    GLuint sky = 0, trace = 0, present = 0, star = 0, asteroid = 0, accumulate = 0;
 
     GLint skyFace = -1, skyFaceSize = -1;
     GLint resolution = -1, time = -1, camPos = -1, camRight = -1, camUp = -1,
@@ -121,7 +124,8 @@ struct Programs {
         glDeleteProgram(present);
         glDeleteProgram(star);
         glDeleteProgram(asteroid);
-        sky = trace = present = star = asteroid = 0;
+        glDeleteProgram(accumulate);
+        sky = trace = present = star = asteroid = accumulate = 0;
     }
 };
 
@@ -135,7 +139,8 @@ bool buildPrograms(Programs& out)
     p.present = loadShaderProgram({vert}, {shaderDir + "/present.frag"});
     p.star = loadShaderProgram({vert}, {noise, shaderDir + "/star.frag"});
     p.asteroid = loadShaderProgram({shaderDir + "/asteroid.vert"}, {shaderDir + "/asteroid.frag"});
-    if (!p.sky || !p.trace || !p.present || !p.star || !p.asteroid) {
+    p.accumulate = loadShaderProgram({vert}, {shaderDir + "/accumulate.frag"});
+    if (!p.sky || !p.trace || !p.present || !p.star || !p.asteroid || !p.accumulate) {
         p.destroy();
         return false;
     }
@@ -257,7 +262,7 @@ void traceSize(int outW, int outH, float scale, int& w, int& h)
 
 // Passe 2 : ray tracing dans target.
 void traceFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarget& target,
-                const App& app, float time)
+                const App& app, float time, float jitterX, float jitterY)
 {
     const OrbitCamera& cam = app.camera;
     const DiskSettings& disk = app.disk;
@@ -291,6 +296,18 @@ void traceFrame(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarg
     glUniform1f(prog.jetWidth, app.jetWidth);
     glUniform1f(prog.lensing, app.lensing ? 1.0f : 0.0f);
     glUniform1f(prog.skyGain, app.skyBrightness);
+    const RealismSettings& re = app.realism;
+    auto loc = [&](const char* name) { return glGetUniformLocation(prog.trace, name); };
+    glUniform1f(loc("uLightDelay"), re.lightDelay ? 1.0f : 0.0f);
+    // Décalage vers le bleu reçu par la caméra immobile à la distance r :
+    // 1 / sqrt(1 - rs / r) (coupé avec le décalage gravitationnel du disque).
+    float obs = 1.0f;
+    if (re.observerShift && disk.gravitationalShift)
+        obs = 1.0f / std::sqrt(std::max(1.0f - 1.0f / cam.distance, 0.05f));
+    glUniform1f(loc("uObsShift"), obs);
+    glUniform1f(loc("uPlunge"), re.plunge ? 1.0f : 0.0f);
+    glUniform1f(loc("uGuides"), re.guides ? 1.0f : 0.0f);
+    glUniform2f(loc("uJitter"), jitterX, jitterY);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, skyTex);
     glUniform1i(prog.skyTex, 0);
@@ -652,33 +669,171 @@ AsteroidRenderer asteroidGfx;
 
 // Trou noir ou étoile, selon le mode, puis les astéroïdes.
 void traceScene(const Programs& prog, GLuint vao, GLuint skyTex, const TraceTarget& target,
-                const App& app, double simTime)
+                const App& app, double simTime, float jitterX = 0.0f, float jitterY = 0.0f)
 {
     if (app.starMode) {
         traceStarFrame(prog, vao, skyTex, target, app, simTime);
     } else {
         app.binary.update(simTime, app.showDisk ? app.disk.outerRadius : 0.0);
-        traceFrame(prog, vao, skyTex, target, app, float(simTime));
+        traceFrame(prog, vao, skyTex, target, app, float(simTime), jitterX, jitterY);
     }
     asteroidGfx.draw(prog, target, app);
     if (!app.starMode)
         drawGasStream(shaderDir, target.fbo, target.width, target.height, app);
 }
 
-// Passe 3 : agrandissement + tone mapping vers outFbo (0 = la fenêtre).
-void presentFrame(const Programs& prog, GLuint vao, const TraceTarget& target, GLuint outFbo,
-                  int outW, int outH, float exposure)
+// Image accumulée : copie de l'image du ray tracer, ou moyenne de plusieurs
+// images en pause. Elle porte les mipmaps qui servent au halo et à
+// l'exposition automatique.
+struct AccumTarget {
+    GLuint tex = 0, fbo = 0;
+    int width = 0, height = 0;
+
+    void resize(int w, int h)
+    {
+        if (w == width && h == height) return;
+        width = w;
+        height = h;
+        if (!tex) {
+            glGenTextures(1, &tex);
+            glGenFramebuffers(1, &fbo);
+        }
+        glBindTexture(GL_TEXTURE_2D, tex);
+        // RGBA16F : assez précis pour une moyenne de 64 images, et le mélange
+        // y est garanti par OpenGL 3.3.
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+
+    void destroy()
+    {
+        glDeleteFramebuffers(1, &fbo);
+        glDeleteTextures(1, &tex);
+        *this = {};
+    }
+};
+
+constexpr int kMaxAccumulated = 64;
+
+// Décalage sous-pixel de l'image n (suite de Halton 2, 3) : les images
+// moyennées couvrent tout le pixel. L'image 1 n'est pas décalée.
+void jitterFor(int n, float& x, float& y)
+{
+    auto halton = [](int i, int base) {
+        float f = 1.0f, r = 0.0f;
+        for (; i > 0; i /= base) {
+            f /= float(base);
+            r += f * float(i % base);
+        }
+        return r;
+    };
+    x = n <= 1 ? 0.0f : halton(n, 2) - 0.5f;
+    y = n <= 1 ? 0.0f : halton(n, 3) - 0.5f;
+}
+
+// Passe 3 : ajoute l'image du ray tracer à l'image accumulée avec le poids
+// 1/n (n = 1 : simple copie), puis recalcule ses mipmaps.
+void accumulateFrame(const Programs& prog, GLuint vao, const TraceTarget& target, AccumTarget& accum, int n)
+{
+    accum.resize(target.width, target.height);
+    glBindFramebuffer(GL_FRAMEBUFFER, accum.fbo);
+    glViewport(0, 0, accum.width, accum.height);
+    glUseProgram(prog.accumulate);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, target.tex);
+    glUniform1i(glGetUniformLocation(prog.accumulate, "uImage"), 0);
+    glUniform2f(glGetUniformLocation(prog.accumulate, "uSize"), float(accum.width), float(accum.height));
+    if (n > 1) {
+        glEnable(GL_BLEND);
+        glBlendColor(0.0f, 0.0f, 0.0f, 1.0f / float(n));
+        glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
+    }
+    glBindVertexArray(vao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glDisable(GL_BLEND);
+    glBindTexture(GL_TEXTURE_2D, accum.tex);
+    glGenerateMipmap(GL_TEXTURE_2D);
+}
+
+// Passe 4 : agrandissement, halo, exposition, tone mapping vers outFbo
+// (0 = la fenêtre).
+void presentFrame(const Programs& prog, GLuint vao, const AccumTarget& accum, GLuint outFbo,
+                  int outW, int outH, const App& app)
 {
     glBindFramebuffer(GL_FRAMEBUFFER, outFbo);
     glViewport(0, 0, outW, outH);
     glUseProgram(prog.present);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, target.tex);
+    glBindTexture(GL_TEXTURE_2D, accum.tex);
     glUniform1i(prog.image, 0);
     glUniform2f(prog.outputSize, float(outW), float(outH));
-    glUniform1f(prog.exposure, exposure);
+    glUniform1f(prog.exposure, app.exposure);
+    glUniform1f(glGetUniformLocation(prog.present, "uBloom"), app.realism.bloom);
+    glUniform1f(glGetUniformLocation(prog.present, "uAutoExposure"), app.realism.autoExposure ? 1.0f : 0.0f);
+    glUniform1f(glGetUniformLocation(prog.present, "uTopLevel"),
+                std::floor(std::log2(float(std::max({accum.width, accum.height, 1})))));
     glBindVertexArray(vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
+}
+
+// Empreinte de tout ce qui change l'image du ray tracer : si elle ne bouge
+// pas d'une image à l'autre (pause, caméra immobile), on peut moyenner.
+std::string sceneSignature(const App& app, int w, int h)
+{
+    Vec3 p = app.camera.position();
+    const DiskSettings& d = app.disk;
+    const RealismSettings& r = app.realism;
+    const BinarySettings& b = app.binary.settings;
+    char buf[512];
+    std::snprintf(buf, sizeof(buf),
+                  "%d %d %.6g %.6g %.6g %.6g %.9g | %g %g %g %g %d %d %d | %d %d %d %g %g %g %g %d | %d %d %d %d | "
+                  "%d %g %g %g %g %g %g %g %d",
+                  w, h, p.x, p.y, p.z, app.camera.fovY, app.simTime, d.innerRadius, d.outerRadius,
+                  d.maxTemperature, d.brightness, d.clumpCount, d.doppler, d.gravitationalShift, app.showDisk,
+                  app.lensing, app.jets, app.jetPower, app.jetBeta, app.jetWidth, app.skyBrightness, app.maxSteps,
+                  r.lightDelay, r.observerShift, r.plunge, r.guides, b.enabled, b.separation, b.massRatio, b.fill,
+                  b.temperature, b.brightness, b.streamRate, b.phase, int(app.asteroids.items.size()));
+    return buf;
+}
+
+// Capture d'écran (touche F12) : BMP 24 bits, lisible partout sous Windows.
+bool writeBMP(const std::string& path, int w, int h)
+{
+    const int row = (w * 3 + 3) & ~3;
+    std::vector<unsigned char> pixels(size_t(row) * h);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glReadPixels(0, 0, w, h, GL_BGR, GL_UNSIGNED_BYTE, pixels.data());   // de bas en haut, comme le BMP
+
+    std::ofstream out(path, std::ios::binary);
+    if (!out) return false;
+    auto u32 = [&](uint32_t v) { out.write(reinterpret_cast<const char*>(&v), 4); };
+    auto u16 = [&](uint16_t v) { out.write(reinterpret_cast<const char*>(&v), 2); };
+    const uint32_t size = uint32_t(pixels.size());
+    out.write("BM", 2);
+    u32(54 + size); u32(0); u32(54);
+    u32(40); u32(uint32_t(w)); u32(uint32_t(h)); u16(1); u16(24); u32(0); u32(size);
+    u32(2835); u32(2835); u32(0); u32(0);
+    out.write(reinterpret_cast<const char*>(pixels.data()), std::streamsize(size));
+    return bool(out);
+}
+
+std::string saveScreenshot(int w, int h)
+{
+    std::error_code ec;
+    std::filesystem::create_directories("captures", ec);
+    std::time_t t = std::time(nullptr);
+    char name[64];
+    std::strftime(name, sizeof(name), "captures/trou-noir-%Y%m%d-%H%M%S.bmp", std::localtime(&t));
+    glReadBuffer(GL_BACK);
+    if (!writeBMP(name, w, h)) return {};
+    return std::filesystem::absolute(name, ec).string();
 }
 
 App* appOf(GLFWwindow* window) { return static_cast<App*>(glfwGetWindowUserPointer(window)); }
@@ -741,6 +896,7 @@ void onKey(GLFWwindow* window, int key, int, int action, int)
     if (uiWantsKeyboard()) return;   // saisie dans le panneau
     switch (key) {
     case GLFW_KEY_ESCAPE: glfwSetWindowShouldClose(window, GLFW_TRUE); break;
+    case GLFW_KEY_F12: app->realism.screenshotRequested = true; break;
     case GLFW_KEY_SPACE:
         app->camera.autoOrbit = !app->camera.autoOrbit;
         notify(*app, std::string("Orbite automatique : ") + onOff(app->camera.autoOrbit));
@@ -928,12 +1084,14 @@ int renderOffscreen(const Programs& prog, GLuint vao, GLuint skyTex, App& app, i
         std::cout << app.regions.count() << " régions actives, " << app.flares.count() << " éruptions, "
                   << app.corona.prominenceCount() << " protubérances\n";
     }
+    AccumTarget accum;
     traceScene(prog, vao, skyTex, target, app, t0);
     glFinish();
     auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < frames; ++i) {
         traceScene(prog, vao, skyTex, target, app, t0 + i * app.simSpeed / 60.0);
-        presentFrame(prog, vao, target, fbo, w, h, app.exposure);
+        accumulateFrame(prog, vao, target, accum, 1);
+        presentFrame(prog, vao, accum, fbo, w, h, app);
         glFinish();
     }
     double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
@@ -945,12 +1103,14 @@ int renderOffscreen(const Programs& prog, GLuint vao, GLuint skyTex, App& app, i
     }
     if (!path.empty()) {
         traceScene(prog, vao, skyTex, target, app, t0);
-        presentFrame(prog, vao, target, fbo, w, h, app.exposure);
+        accumulateFrame(prog, vao, target, accum, 1);
+        presentFrame(prog, vao, accum, fbo, w, h, app);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         if (!writePPM(path, w, h)) code = EXIT_FAILURE;
     }
 
     target.destroy();
+    accum.destroy();
     glDeleteFramebuffers(1, &fbo);
     glDeleteTextures(1, &tex);
     return code;
@@ -1132,6 +1292,8 @@ int main(int argc, char** argv)
     uiInit(window);   // après nos callbacks : ImGui les enchaîne
 
     TraceTarget target;
+    AccumTarget accum;
+    std::string lastSignature;
     AutoResolution autoRes;
 
     double lastFrame = glfwGetTime();
@@ -1190,10 +1352,31 @@ int main(int argc, char** argv)
         traceSize(fbW, fbH, app.renderScale, tw, th);
         target.resize(tw, th);
 
-        autoRes.begin();
-        traceScene(prog, vao, skyTex, target, app, app.simTime);
-        autoRes.end();
-        presentFrame(prog, vao, target, 0, fbW, fbH, app.exposure);
+        // En pause, caméra immobile : on moyenne des images décalées d'une
+        // fraction de pixel (image lissée). Après kMaxAccumulated images,
+        // l'image ne change plus : on ne refait plus le ray tracing.
+        RealismSettings& re = app.realism;
+        std::string signature;
+        if (re.smoothPause && app.paused && !app.starMode && !app.dragging)
+            signature = sceneSignature(app, tw, th);
+        bool still = !signature.empty() && signature == lastSignature;
+        lastSignature = signature;
+        if (!still || re.accumulated < kMaxAccumulated) {
+            re.accumulated = still ? re.accumulated + 1 : 1;
+            float jx, jy;
+            jitterFor(re.accumulated, jx, jy);
+            autoRes.begin();
+            traceScene(prog, vao, skyTex, target, app, app.simTime, jx, jy);
+            autoRes.end();
+            accumulateFrame(prog, vao, target, accum, re.accumulated);
+        }
+        presentFrame(prog, vao, accum, 0, fbW, fbH, app);
+        if (re.screenshotRequested) {
+            re.screenshotRequested = false;
+            std::string path = saveScreenshot(fbW, fbH);
+            notify(app, path.empty() ? "Capture impossible (dossier captures non accessible)" : "Capture : " + path);
+            if (!path.empty()) std::cout << "Capture enregistrée : " << path << "\n";
+        }
 
         stats.traceWidth = tw;
         stats.traceHeight = th;
@@ -1223,6 +1406,7 @@ int main(int argc, char** argv)
     asteroidGfx.destroy();
     destroyBinaryGfx();
     target.destroy();
+    accum.destroy();
     glDeleteQueries(1, &autoRes.query);
     glDeleteTextures(1, &skyTex);
     glDeleteVertexArrays(1, &vao);

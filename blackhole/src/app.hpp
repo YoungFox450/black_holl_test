@@ -85,6 +85,20 @@ struct DiskSettings {
     bool gravitationalShift = true; // décalage gravitationnel vers le rouge
 };
 
+// Réalisme de l'image (src/ui_realism.cpp) : effets relativistes en plus et
+// rendu « photo » (halo, exposition automatique, image lissée en pause).
+struct RealismSettings {
+    bool lightDelay = true;       // le disque est vu tel qu'il était quand la lumière est partie
+    bool observerShift = true;    // la caméra près du trou noir reçoit une lumière plus bleue
+    bool plunge = true;           // gaz qui plonge sous l'ISCO
+    bool guides = false;          // repères : sphère de photons et ISCO
+    float bloom = 0.35f;          // halo autour des zones vives (0 = coupé)
+    bool autoExposure = false;
+    bool smoothPause = true;      // en pause, moyenne d'images décalées d'une fraction de pixel
+    int accumulated = 0;          // images déjà moyennées (affiché dans le panneau)
+    bool screenshotRequested = false;   // touche F12
+};
+
 struct App {
     OrbitCamera camera;
     bool dragging = false;
@@ -107,6 +121,7 @@ struct App {
     float exposure = 1.0f;
 
     DiskSettings disk;
+    RealismSettings realism;
 
     // Masse du trou noir en masses solaires. Les calculs sont faits en unités
     // de rs : la masse ne change pas l'image, seulement la conversion vers
