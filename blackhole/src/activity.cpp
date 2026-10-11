@@ -1,4 +1,5 @@
 #include "activity.hpp"
+#include "regions.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -191,7 +192,7 @@ double FlareSimulator::profile(const Flare& f, double days) const
 }
 
 void FlareSimulator::spawn(const Star& star, const StellarActivity& act, const CycleState& cyc,
-                           double days)
+                           double days, const ActiveRegionSimulator* regions)
 {
     // Énergie (durée équivalente ED, en secondes) tirée dans la loi de
     // puissance dN/dED ∝ ED^-α entre ED_min et 1000 ED_min.
@@ -207,17 +208,36 @@ void FlareSimulator::spawn(const Star& star, const StellarActivity& act, const C
     // L_pic = E / (1,827 t½) : 1,827 = intégrale du profil de Davenport.
     f.peakRatio = ed / (1.827 * halfReal);
     // Aire : rayonne comme un corps noir à 9 000 K.
-    f.areaFraction = std::min(f.peakRatio * std::pow(star.temperature / kFlareTemp, 4.0), 0.05);
+    // Les plus grosses « superéruptions » couvrent ~1 % de la surface.
+    f.areaFraction = std::min(f.peakRatio * std::pow(star.temperature / kFlareTemp, 4.0), 0.01);
 
-    // Position : dans une bande de taches, longitude au hasard.
+    // Position : au milieu d'une région active (entre ses deux taches, sur la
+    // ligne d'inversion de polarité), la région tirée selon son aire.
+    int ri = regions ? regions->pick(uniform(), days) : -1;
+    if (ri >= 0) {
+        const ActiveRegion& r = regions->regions()[ri];
+        regions->center(r, f.latitude, f.longitude);
+        f.ribbonAngle = regions->axisAngle(r, days) + 0.5 * kPi;
+        // L'éruption ne peut pas couvrir plus que sa région (taches + plage).
+        f.areaFraction = std::min(f.areaFraction, 0.5 * regions->areaAt(r, days) + 2e-4);
+        ++total_;
+        push(f, days);
+        return;
+    }
+    // Sans région : dans une bande de taches, longitude au hasard.
     int band = uniform() < cyc.bandWeight[0] ? 0 : 1;
     double sigma = 7.0 * (1.0 + 2.0 * act.polewardShift);
     double g = std::sqrt(-2.0 * std::log(std::max(uniform(), 1e-12))) * std::cos(2.0 * kPi * uniform());
     double lat = std::clamp(cyc.bandLatDeg[band] + sigma * g, 0.0, 89.0) * kPi / 180.0;
     f.latitude = uniform() < 0.5 ? lat : -lat;
     f.longitude = 2.0 * kPi * uniform();
-
+    f.ribbonAngle = 2.0 * kPi * uniform();
     ++total_;
+    push(f, days);
+}
+
+void FlareSimulator::push(const Flare& f, double days)
+{
     if (count_ < kMax) {
         flares_[count_++] = f;
     } else {
@@ -232,7 +252,7 @@ void FlareSimulator::spawn(const Star& star, const StellarActivity& act, const C
 }
 
 void FlareSimulator::update(const Star& star, const StellarActivity& act, const CycleState& cyc,
-                            double days)
+                            double days, const ActiveRegionSimulator* regions)
 {
     double rate = act.flaresPerDay * cyc.level; // ED > 1 s, par jour
     // Avec α = 2, N(> ED) ∝ 1 / ED : on n'affiche que les éruptions assez
@@ -254,7 +274,7 @@ void FlareSimulator::update(const Star& star, const StellarActivity& act, const 
         if (!hasNext_) nextDays_ = days - std::log(1.0 - uniform()) / visibleRate;
         hasNext_ = true;
         for (int n = 0; nextDays_ <= days && n < 8; ++n) {
-            spawn(star, act, cyc, nextDays_);
+            spawn(star, act, cyc, nextDays_, regions);
             nextDays_ -= std::log(1.0 - uniform()) / visibleRate;
         }
         if (nextDays_ <= days) nextDays_ = days - std::log(1.0 - uniform()) / visibleRate;

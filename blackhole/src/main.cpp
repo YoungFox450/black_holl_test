@@ -314,8 +314,9 @@ void updateStarActivity(App& app, double simTime)
     StellarActivity act = computeActivity(app.star);
     double days = simTime / 10.0 * kStarDaysPerSecond;
     CycleState cyc = cycleState(act, cyclePhase(app, act));
-    app.flares.update(app.star, act, cyc, days);
-    app.corona.update(app.star, act, cyc, days, starRotationAngle(app.star, days));
+    app.regions.update(app.star, act, cyc, cycleNumber(app, act), days);
+    app.flares.update(app.star, act, cyc, days, &app.regions);
+    app.corona.update(app.star, act, cyc, days, starRotationAngle(app.star, days), &app.regions);
 }
 
 // Passe 2 bis : ray tracing d'une étoile (shaders/star.frag). Les paramètres
@@ -384,49 +385,72 @@ void traceStarFrame(const Programs& prog, GLuint vao, GLuint skyTex, const Trace
     glUniform1f(loc("uRotation"), float(rotation));
     glUniform1f(loc("uPulse"), float(oscillation(act, days)));
 
-    // Taches : amplitude de chaque bande telle que la fraction de surface
-    // tachée vaille f × niveau du cycle × part de la bande.
-    const double deg = kTwoPi / 360.0;
-    double sigma = 7.0 * (1.0 + 2.0 * act.polewardShift) * deg;
-    float band[4] = {0, 0, 0, 0};
-    for (int k = 0; k < 2; ++k) {
-        double lat0 = cyc.bandLatDeg[k] * deg;
-        double integral = 0.0; // ∫₀^π/2 G(λ) cos λ dλ (les deux hémisphères)
-        const int n = 200;
-        for (int i = 0; i < n; ++i) {
-            double lat = (i + 0.5) / n * kTwoPi / 4.0;
-            double x = (lat - lat0) / sigma;
-            integral += std::exp(-0.5 * x * x) * std::cos(lat) * (kTwoPi / 4.0) / n;
-        }
-        band[2 * k] = float(lat0);
-        band[2 * k + 1] = float(act.spotCoverage * cyc.level * cyc.bandWeight[k] / integral);
-    }
+    // Taches : groupes bipolaires simulés sur le CPU (src/regions.cpp). Pour
+    // chaque tache : direction, rayon angulaire, polarité et facules autour.
     glUniform1i(loc("uSpotsOn"), act.active() ? 1 : 0);
-    glUniform4f(loc("uBand"), band[0], band[1], band[2], band[3]);
-    glUniform1f(loc("uBandWidth"), float(sigma));
-    glUniform1f(loc("uFaculaRatio"), float(act.active() ? act.faculaCoverage / act.spotCoverage : 0.0));
     glUniform1f(loc("uUmbraRatio"), float(act.active() ? act.umbraTemp / star.temperature : 1.0));
     glUniform1f(loc("uPenumbraRatio"), float(act.active() ? act.penumbraTemp / star.temperature : 1.0));
-
-    // Deux générations de taches décalées d'une demi-vie : poids sin² et cos²
-    // (somme 1), chacune cisaillée depuis sa naissance seulement.
-    float layers[6] = {0, 0, 0, 0, 0, 0};
-    if (act.active()) {
-        double life = act.spotLifetimeDays;
-        for (int k = 0; k < 2; ++k) {
-            double u = days / life + 0.5 * k;
-            double gen = std::floor(u);
-            double age = u - gen;
-            double w = std::sin(age * kTwoPi / 2.0);
-            layers[3 * k + 0] = float(w * w);
-            layers[3 * k + 1] = float(shear * age * life);
-            layers[3 * k + 2] = float(std::fmod(2.0 * gen + k, 64.0));
+    {
+        constexpr int kSpots = 2 * ActiveRegionSimulator::kMax;
+        float spotA[4 * kSpots] = {}, spotB[4 * kSpots] = {};
+        float helmet[4 * ActiveRegionSimulator::kMax] = {};
+        int nSpots = 0, nHelmets = 0;
+        // Les casques de la couronne, projetés sur le ciel vu de la caméra
+        // (calculé ici une fois par image plutôt qu'à chaque pixel).
+        const Vec3 view = normalize(pos);
+        double spotArea = 0.0, plageArea = 0.0;
+        const ActiveRegionSimulator& reg = app.regions;
+        for (int i = 0; act.active() && i < reg.count(); ++i) {
+            const ActiveRegion& r = reg.regions()[i];
+            double area = reg.areaAt(r, days);
+            if (area <= 0.0) continue;
+            for (int k = 0; k < 2; ++k) {
+                double share = k == 0 ? ActiveRegionSimulator::kLeadShare : 1.0 - ActiveRegionSimulator::kLeadShare;
+                double rad = ActiveRegionSimulator::spotRadius(share * area);
+                double s2 = std::sin(r.lat[k]) * std::sin(r.lat[k]);
+                Vec3 d = surfacePoint(r.lat[k], r.lon[k], std::fmod((omega - shear * s2) * days, kTwoPi));
+                // Plage de facules : ~2,5 fois le rayon de la tache, qui reste
+                // quand la tache disparaît (le champ se disperse).
+                double plage = 2.5 * ActiveRegionSimulator::spotRadius(share * r.peakArea) + 0.02;
+                float* A = spotA + 4 * nSpots;
+                float* B = spotB + 4 * nSpots;
+                A[0] = d.x; A[1] = d.y; A[2] = d.z; A[3] = float(rad);
+                B[0] = float(k == 0 ? r.leadingPolarity : -r.leadingPolarity);
+                B[1] = r.seed + 13.0f * float(k);
+                B[2] = float(plage);
+                B[3] = float(area / r.peakArea);   // 1 = au maximum, 0 = disparue
+                if (k == 0) {
+                    float dv = d.x * view.x + d.y * view.y + d.z * view.z;
+                    Vec3 cp = {d.x - view.x * dv, d.y - view.y * dv, d.z - view.z * dv};
+                    float len = std::sqrt(cp.x * cp.x + cp.y * cp.y + cp.z * cp.z);
+                    if (len >= 0.2f) {   // jet vu de face : caché par le disque
+                        float* H = helmet + 4 * nHelmets++;
+                        H[0] = cp.x / len; H[1] = cp.y / len; H[2] = cp.z / len;
+                        H[3] = len * float(area / r.peakArea);
+                    }
+                }
+                spotArea += share * area;
+                plageArea += 0.25 * plage * plage;
+                ++nSpots;
+            }
         }
+        // Remplissage des plages : l'aire des facules vaut celle du modèle
+        // d'activité (rapport facules / taches de Shapiro et al. 2014).
+        double fill = 0.0;
+        if (plageArea > 0.0 && act.spotCoverage > 0.0)
+            fill = std::clamp(act.faculaCoverage / act.spotCoverage * spotArea / plageArea, 0.15, 1.0);
+        glUniform1i(loc("uSpotCount"), nSpots);
+        glUniform4fv(loc("uSpot"), kSpots, spotA);
+        glUniform4fv(loc("uSpotInfo"), kSpots, spotB);
+        glUniform1i(loc("uHelmetCount"), nHelmets);
+        glUniform4fv(loc("uHelmet"), ActiveRegionSimulator::kMax, helmet);
+        glUniform1f(loc("uPlageFill"), float(fill));
+        glUniform1i(loc("uMagnetogram"), app.showMagnetogram && act.active() ? 1 : 0);
     }
-    glUniform3fv(loc("uSpotLayer"), 2, layers);
 
     // Éruptions en cours.
     float flarePos[4 * FlareSimulator::kMax] = {};
+    float flareAxis[4 * FlareSimulator::kMax] = {};
     float flareAmp[FlareSimulator::kMax] = {};
     int nFlares = 0;
     for (int i = 0; i < app.flares.count(); ++i) {
@@ -438,11 +462,24 @@ void traceStarFrame(const Programs& prog, GLuint vao, GLuint skyTex, const Trace
         flarePos[4 * nFlares + 1] = d.y;
         flarePos[4 * nFlares + 2] = d.z;
         flarePos[4 * nFlares + 3] = float(std::max(2.0 * f.areaFraction, 1e-5));
+        // Direction des rubans sur la surface, et leur écartement qui grandit
+        // pendant l'éruption (la reconnexion monte dans la couronne).
+        double sl = std::sin(f.latitude), cl = std::cos(f.latitude), a = angle + f.longitude;
+        Vec3 east = {float(-std::sin(a)), 0.0f, float(-std::cos(a))};
+        Vec3 north = {float(-sl * std::cos(a)), float(cl), float(sl * std::sin(a))};
+        float cr = float(std::cos(f.ribbonAngle)), sr = float(std::sin(f.ribbonAngle));
+        Vec3 tg = normalize({cr * east.x + sr * north.x, cr * east.y + sr * north.y, cr * east.z + sr * north.z});
+        double progress = (days - f.startDays) / (4.0 * f.halfSeconds * kStarDaysPerSecond);
+        flareAxis[4 * nFlares + 0] = tg.x;
+        flareAxis[4 * nFlares + 1] = tg.y;
+        flareAxis[4 * nFlares + 2] = tg.z;
+        flareAxis[4 * nFlares + 3] = float(std::clamp(progress, 0.0, 1.0));
         flareAmp[nFlares] = float(app.flares.profile(f, days));
         ++nFlares;
     }
     glUniform1i(loc("uFlareCount"), nFlares);
     glUniform4fv(loc("uFlarePos"), FlareSimulator::kMax, flarePos);
+    glUniform4fv(loc("uFlareAxis"), FlareSimulator::kMax, flareAxis);
     glUniform1fv(loc("uFlareAmp"), FlareSimulator::kMax, flareAmp);
 
     // Couronne, protubérances, éjections de masse coronale (src/corona.cpp).
@@ -803,10 +840,18 @@ void onChar(GLFWwindow* window, unsigned int c)
     case 'm': case 'M':
         if (a.starMode && computeCorona(a.star, computeActivity(a.star)).active) {
             double days = starDays(a);
-            a.corona.launchCme(a.star, computeActivity(a.star), days, starRotationAngle(a.star, days));
+            a.corona.launchCme(a.star, computeActivity(a.star), days, starRotationAngle(a.star, days), &a.regions);
             notify(a, "Éjection de masse coronale !");
         } else {
             notify(a, "M : éjection de masse coronale (étoile active seulement)");
+        }
+        break;
+    case 'y': case 'Y':
+        if (a.starMode && computeActivity(a.star).active()) {
+            a.showMagnetogram = !a.showMagnetogram;
+            notify(a, std::string("Magnétogramme : ") + onOff(a.showMagnetogram));
+        } else {
+            notify(a, "Y : magnétogramme (étoile active seulement)");
         }
         break;
     case 'x': case 'X':
@@ -880,6 +925,8 @@ int renderOffscreen(const Programs& prog, GLuint vao, GLuint skyTex, App& app, i
         // Simule les éruptions des 20 dernières secondes pour l'image.
         for (int i = 200; i >= 0; --i)
             updateStarActivity(app, t0 - i * 1.0);
+        std::cout << app.regions.count() << " régions actives, " << app.flares.count() << " éruptions, "
+                  << app.corona.prominenceCount() << " protubérances\n";
     }
     traceScene(prog, vao, skyTex, target, app, t0);
     glFinish();
@@ -978,6 +1025,7 @@ int main(int argc, char** argv)
         else if (arg == "--sky" && hasValue) skySize = std::clamp(std::atoi(argv[++i]), 128, 4096);
         else if (arg == "--no-disk") app.showDisk = false;
         else if (arg == "--no-lensing") app.lensing = false;
+        else if (arg == "--magnetogram") app.showMagnetogram = true;
         else if (arg == "--time" && hasValue) app.simTime = std::atof(argv[++i]);
         else if (arg == "--yaw" && hasValue) app.camera.yaw = float(std::atof(argv[++i]));
         else if (arg == "--pitch" && hasValue) app.camera.pitch = float(std::atof(argv[++i]));

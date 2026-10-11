@@ -49,6 +49,7 @@ const Binding kBindings[] = {
     {"Scène", {"E", nullptr}, "trou noir / étoile", nullptr},
     {"Scène", {"N", "B", nullptr}, "étoile suivante / précédente", "Soleil, Proxima, Sirius, Rigel, Bételgeuse, pulsars...", Scope::Star},
     {"Scène", {"I", "U", nullptr}, "étoile plus / moins massive", "Étoile de la séquence principale, masse × 1,25 ou / 1,25.", Scope::Star},
+    {"Scène", {"Y", nullptr}, "magnétogramme", "Montre le champ magnétique le long de la ligne de visée : blanc = sortant, noir = rentrant. Les groupes de taches sont bipolaires (loi de Hale). Étoiles actives seulement.", Scope::Star},
     {"Scène", {"M", nullptr}, "éjection de masse coronale", "La plus haute protubérance éclate et une bulle de plasma part dans l'espace. Étoiles actives seulement (taches, éruptions).", Scope::Star},
 
     {"Trou noir", {"H", nullptr}, "disque d'accrétion", nullptr, Scope::BlackHole},

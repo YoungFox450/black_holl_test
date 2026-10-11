@@ -11,19 +11,23 @@
 //    - corps noir a la temperature effective T (decalee vers le rouge par la
 //      gravite : T_obs = T sqrt(1 - rs/R))
 //    - assombrissement centre-bord : I(mu) = 1 - u (1 - mu)
-//    - granulation : cellules de convection, dont la taille suit la gravite
-//    - activite magnetique (src/activity.cpp) : taches (ombre + penombre)
-//      dans les bandes de latitude du cycle (loi de Sporer), facules
-//      brillantes pres du bord, rotation differentielle, eruptions
+//    - assombrissement colore : au bord on voit des couches plus froides
+//      (Eddington-Barbier), le bord est plus rouge
+//    - granulation : cellules de Worley dont la taille suit la gravite,
+//      fondue quand elles sont plus petites que le pixel
+//    - activite magnetique (src/regions.cpp) : groupes bipolaires de taches
+//      (lois de Joy, de Hale, de Sporer), ombre decalee par la depression de
+//      Wilson, penombre filamentaire, plages de facules, magnetogramme
+//    - eruptions en deux rubans de part et d'autre de la ligne d'inversion
+//      de polarite, qui s'ecartent (src/activity.cpp)
 //    - oscillations de luminosite (geantes rouges)
 //  Les parametres viennent du modele physique (src/star.cpp, src/activity.cpp).
 //
 //  Autour des etoiles a dynamo (src/corona.cpp), calcule sans pas
 //  d'integration (rayons droits) :
-//    - couronne : lumiere de la photosphere diffusee par les electrons
-//      (couronne K), densite en r^-4 donc colonne en b^-3 (b : distance du
-//      rayon au centre), jets coronaux pres de l'equateur au minimum du
-//      cycle, structures radiales ;
+//    - couronne : profil de Baumbach mesure aux eclipses, jets coronaux
+//      pres de l'equateur au minimum du cycle, casques au-dessus des
+//      regions actives ; chromosphere rose herissee de spicules ;
 //    - protuberances : rideaux de gaz froid dans un plan vertical, arches
 //      au-dessus des regions actives, nuages en corotation. Roses (raie
 //      H-alpha) au bord, filaments sombres devant le disque ;
@@ -63,30 +67,30 @@ uniform float uGranScale;   // cellules de convection par rayon
 uniform float uRotation;    // angle de rotation de l'equateur (rad)
 uniform float uPulse;       // variation relative de luminosite (oscillations)
 
-// Taches. La probabilite qu'un point soit dans une tache depend de sa
-// latitude : deux bandes gaussiennes (cycle en cours, cycle precedent).
+// Taches : groupes bipolaires simules sur le CPU (src/regions.cpp).
+// uSpot     : direction du centre (repere du monde), rayon angulaire (rad)
+// uSpotInfo : polarite (+1 / -1), graine, rayon de la plage de facules,
+//             age (1 = aire maximale, 0 = disparue)
+const int MAX_SPOTS = 24;
 uniform int   uSpotsOn;
-uniform vec4  uBand;        // (latitude 1, amplitude 1, latitude 2, amplitude 2)
-uniform float uBandWidth;   // ecart-type des bandes (rad)
-uniform float uFaculaRatio; // aire des facules / aire des taches
+uniform int   uSpotCount;
+uniform vec4  uSpot[MAX_SPOTS];
+uniform vec4  uSpotInfo[MAX_SPOTS];
+uniform int   uHelmetCount;
+uniform vec4  uHelmet[MAX_SPOTS / 2]; // casques : direction sur le ciel, poids
+uniform float uPlageFill;   // part de la plage couverte de facules
 uniform float uUmbraRatio;  // T_ombre / T
 uniform float uPenumbraRatio;
-// Deux generations de taches qui se relaient (naissance puis disparition) :
-// (poids, cisaillement accumule depuis la naissance en rad, graine).
-uniform vec3  uSpotLayer[2];
+uniform int   uMagnetogram; // 1 : on montre le champ magnetique (gris = 0)
 
 // Eruptions : direction du centre (repere fixe), s = 2 x aire relative,
-// intensite du profil temporel (0..1).
+// intensite du profil temporel (0..1), direction des rubans et avancement.
 const int MAX_FLARES = 4;
 uniform int   uFlareCount;
 uniform vec4  uFlarePos[MAX_FLARES];
+uniform vec4  uFlareAxis[MAX_FLARES];
 uniform float uFlareAmp[MAX_FLARES];
 const float FLARE_TEMP = 9000.0;
-
-// Seuils du bruit fbm(3 octaves) depasses par une fraction 10^-k des points,
-// k = 0 ; 0,5 ; ... ; 4 (mesures, voir kSpotNoiseQuantiles dans activity.hpp).
-const float SPOT_Q[9] = float[9](0.0826, 0.4808, 0.5599, 0.6222, 0.6624,
-                                 0.6875, 0.7012, 0.7118, 0.7226);
 
 // Couronne, protuberances, ejections (src/corona.cpp, repere du monde).
 const int MAX_PROMS = 6;
@@ -140,23 +144,6 @@ vec3 rotateY(vec3 p, float a)
 {
     float c = cos(a), s = sin(a);
     return vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z);
-}
-
-// Seuil de bruit au-dessus duquel se trouve une fraction p de la surface.
-float noiseThreshold(float p)
-{
-    if (p < 1e-5) return 2.0;                 // jamais atteint
-    float k = clamp(-log(p) / log(10.0), 0.0, 3.999) * 2.0;
-    int i = int(k);
-    return mix(SPOT_Q[i], SPOT_Q[i + 1], k - float(i));
-}
-
-// Couverture locale des taches selon la latitude (lat = |latitude|).
-float spotProbability(float lat)
-{
-    float a = (lat - uBand.x) / uBandWidth;
-    float b = (lat - uBand.z) / uBandWidth;
-    return min(uBand.y * exp(-0.5 * a * a) + uBand.w * exp(-0.5 * b * b), 0.5);
 }
 
 // Axe magnetique dans le repere de l'etoile (fixe) et dans le repere du monde.
@@ -223,90 +210,245 @@ vec3 fieldLines(vec3 p, float burst)
 }
 
 // Lumiere emise par la surface au point n (|n| = 1), vue sous l'angle mu.
-vec3 surface(vec3 n, float mu)
+// Granulation : cellules de convection (bruit cellulaire de Worley).
+// Renvoie F1 et F2, distances au centre de cellule le plus proche et au
+// suivant : F2 - F1 ~ 0 sur les bords (couloirs sombres ou le gaz refroidi
+// redescend), grand au milieu (gaz chaud qui monte). Les centres bougent
+// lentement : les granules naissent, grossissent et se fragmentent.
+vec2 cellular(vec3 p, float t)
+{
+    // On ne visite que les 8 cellules les plus proches (au lieu de 27) :
+    // avec des centres qui bougent d'au plus 0,3, l'erreur est rare et
+    // invisible, et la carte Intel fait 3 fois moins de calculs.
+    vec3 i = floor(p - 0.5);
+    vec3 f = p - i;
+    float d1 = 8.0, d2 = 8.0;
+    for (int z = 0; z <= 1; ++z)
+    for (int y = 0; y <= 1; ++y)
+    for (int x = 0; x <= 1; ++x) {
+        vec3 g = vec3(float(x), float(y), float(z));
+        vec3 h = hash33(i + g);
+        vec3 r = g + 0.5 + 0.3 * sin(t + 6.2831853 * h) - f;
+        float d = dot(r, r);
+        if (d < d1) { d2 = d1; d1 = d; }
+        else if (d < d2) d2 = d;
+    }
+    return sqrt(vec2(d1, d2));
+}
+
+// Taches, facules et champ magnetique au point n de la surface.
+//  - ombre : rayon ~0,42 x celui de la tache (ombre ~18 % de l'aire) ;
+//  - penombre : filaments radiaux plus ou moins chauds ;
+//  - depression de Wilson : l'ombre est ~500 km plus bas que la surface ;
+//    vue de biais, elle parait decalee vers le centre du disque et la
+//    penombre du cote du centre est cachee ;
+//  - facules : plages brillantes autour des taches, qui restent quand
+//    la tache a disparu ;
+//  - champ : ~0,3 T dans l'ombre, ~0,15 T en penombre, ~0,03 T dans la
+//    plage, de signe donne par la polarite (loi de Hale).
+void spotsAt(vec3 n, vec3 toCam, out float umbra, out float penumbra, out float fil,
+             out float facula, out float field)
+{
+    umbra = 0.0; penumbra = 0.0; fil = 0.5; facula = 0.0; field = 0.0;
+    for (int i = 0; i < MAX_SPOTS; ++i) {
+        if (i >= uSpotCount) break;
+        vec4 sp = uSpot[i];
+        vec4 info = uSpotInfo[i];
+        float cosd = dot(n, sp.xyz);
+        if (cosd < cos(info.z)) continue;                  // hors de la plage
+        float d = acos(clamp(cosd, -1.0, 1.0));
+        float x = d / (0.55 * info.z);
+        float pl = exp(-x * x);
+        facula = max(facula, pl);
+        field += info.x * 0.1 * pl;
+        float r = sp.w;
+        if (r <= 0.0 || d > 1.4 * r) continue;
+        vec3 off = n - sp.xyz * cosd;                      // vers le point, sur la surface
+        vec3 around = normalize(off + sp.xyz * 1e-5);      // direction autour du centre
+        // Bord irregulier (les taches ne sont pas rondes).
+        float wobble = 1.0 + 0.35 * (valueNoise(around * 3.0 + info.y) - 0.5);
+        vec3 view = toCam - sp.xyz * dot(toCam, sp.xyz);   // vers le centre du disque (sin theta)
+        float ru = 0.42 * r * wobble;
+        float du = length(off - 0.5 * ru * view);
+        float um = 1.0 - smoothstep(0.75 * ru, 1.05 * ru, du);
+        float pe = 1.0 - smoothstep(0.85 * r * wobble, 1.08 * r * wobble, d);
+        // Filaments : le bruit ne depend que de la direction autour du centre.
+        float f = smoothstep(0.25, 0.75, valueNoise(around * 26.0 + info.y));
+        penumbra = max(penumbra, pe);
+        umbra = max(umbra, um);
+        fil = mix(fil, f, pe);
+        field += info.x * (0.5 * pe + 0.5 * um) * info.w;
+    }
+    facula *= 1.0 - penumbra;
+}
+
+vec3 surface(vec3 n, float mu, vec3 toCam)
 {
     vec3 q = rotateY(n, -uRotation);
 
-    // Granulation : centres chauds des cellules, bords sombres. Elle est forte
-    // chez les etoiles froides (enveloppe convective), quasi absente chez les
-    // etoiles chaudes (energie transportee par rayonnement).
-    float s = uGranScale;
-    float cells = 1.0 - abs(2.0 * valueNoise(q * s + vec3(0.0, uTime * 0.03, 0.0)) - 1.0);
-    float fine  = valueNoise(q * s * 2.7 - vec3(uTime * 0.05));
-    float convective = clamp((8000.0 - uStarTemp) / 4000.0, 0.05, 1.0);
-    float gran = 1.0 + convective * (0.45 * (cells - 0.6) + 0.12 * (fine - 0.5));
+    float umbra = 0.0, penumbra = 0.0, fil = 0.5, facula = 0.0, field = 0.0;
+    if (uSpotsOn != 0) spotsAt(n, toCam, umbra, penumbra, fil, facula, field);
 
-    // Taches et facules.
-    float spot = 0.0, umbra = 0.0, facula = 0.0;
-    if (uSpotsOn != 0) {
-        float sinLat2 = n.y * n.y;
-        float p = spotProbability(asin(min(abs(n.y), 1.0)));
-        float tSpot = noiseThreshold(p);
-        float tUmbra = noiseThreshold(0.2 * p);            // ombre : ~20 % de la tache
-        float tFac = noiseThreshold(p * (1.0 + uFaculaRatio));
-        for (int k = 0; k < 2; ++k) {
-            vec3 layer = uSpotLayer[k];
-            if (layer.x <= 0.001) continue;
-            // Rotation differentielle : Omega(lat) = Omega_eq (1 - alpha sin^2 lat).
-            vec3 qs = rotateY(n, -uRotation + layer.y * sinLat2);
-            float v = fbm(qs * 3.5 + vec3(11.0) + layer.z * vec3(7.13, 3.71, 5.29), 3);
-            float sk = smoothstep(tSpot - 0.008, tSpot + 0.008, v);
-            spot   += layer.x * sk;
-            umbra  += layer.x * smoothstep(tUmbra - 0.008, tUmbra + 0.008, v);
-            facula += layer.x * smoothstep(tFac - 0.008, tFac + 0.008, v) * (1.0 - sk);
-        }
+    // Magnetogramme : ce que mesure un instrument comme HMI, le champ le long
+    // de la ligne de visee (B cos theta = B mu pour un champ vertical).
+    // Blanc : champ sortant, noir : champ rentrant, gris : pas de champ.
+    if (uMagnetogram != 0) {
+        float b = clamp(field * mu * 1.6, -1.0, 1.0);
+        float shade = 0.5 + 0.5 * b;
+        return vec3(shade * shade) * EXPOSURE * step(0.0, mu);
     }
-    // Temperature locale : ombre et penombre plus froides que la photosphere.
-    float tFactor = 1.0 - spot * (1.0 - uPenumbraRatio) - umbra * (uPenumbraRatio - uUmbraRatio);
-    // Facules : contraste quasi nul au centre du disque, ~15 % pres du bord.
-    float facBoost = 1.0 + facula * 0.15 * (1.0 - mu);
+
+    // Granulation. Contraste ~15 % chez le Soleil (enveloppe convective),
+    // quasi nul chez les etoiles chaudes (energie transportee par
+    // rayonnement), etouffe par le champ dans les taches.
+    // Taille d'un pixel sur la surface (en rayons), allongee pres du bord.
+    // Quand une cellule fait moins de ~3 pixels, l'oeil (ou le telescope)
+    // ne la resout plus : on ne voit que sa moyenne. On fond donc le
+    // contraste vers 0, et on saute le bruit cellulaire (le plus cher).
+    float pixel = 2.0 * tan(0.5 * uFovY) / uResolution.y * length(uCamPos - n) / max(mu, 0.2);
+    float resolved = 1.0 - smoothstep(0.18, 0.4, pixel * uGranScale);
+    float g0 = 0.55;
+    if (resolved > 0.0) {
+        vec2 F = cellular(q * uGranScale, uTime * 0.35);
+        float interior = smoothstep(0.0, 0.45, F.y - F.x);   // 0 : couloir sombre
+        float fine = valueNoise(q * uGranScale * 3.1 + uTime * 0.05);
+        g0 = mix(0.55, 0.55 * interior + 0.3 * (1.0 - F.x) + 0.15 * fine, resolved);
+    }
+    // Non resolue, la granulation laisse un leger moutonnement.
+    g0 += (1.0 - resolved) * 0.12 * (valueNoise(q * uGranScale * 0.35 + uTime * 0.02) - 0.5);
+    float convective = clamp((8000.0 - uStarTemp) / 4000.0, 0.05, 1.0);
+    float gran = 1.0 + convective * 0.4 * (g0 - 0.55) * (1.0 - penumbra);
+
+    // Temperature locale : ombre et penombre (filaments chauds et froids).
+    float pen = mix(uPenumbraRatio, 1.0, 0.45 * (fil - 0.4));
+    float tFactor = 1.0 - penumbra * (1.0 - pen) - umbra * (pen - uUmbraRatio);
+    // Facules : contraste quasi nul au centre du disque, ~25 % pres du bord
+    // (on voit leurs parois chaudes de biais). Grains brillants dans la plage.
+    float facBoost = 1.0;
+    if (facula > 0.01) {
+        float grains = smoothstep(0.4, 0.8, valueNoise(q * uGranScale * 0.7 + 3.7));
+        facBoost += facula * uPlageFill * grains * 0.25 * (1.0 - mu);
+    }
 
     // Decalage gravitationnel vers le rouge.
     float g = sqrt(max(1.0 - uCompact, 0.05));
     float pulse = 1.0 + uPulse;
-    float T = uStarTemp * g * tFactor * mix(1.0, gran, 0.5) * sqrt(sqrt(facBoost * pulse));
+
+    // Assombrissement centre-bord. Au bord, on voit des couches plus hautes
+    // et plus froides (relation d'Eddington-Barbier : I(mu) = B(T(tau = mu))).
+    // Atmosphere grise : T(mu)^4 proportionnel a I(mu) = 1 - u (1 - mu), donc
+    // le bord est plus rouge en plus d'etre plus sombre.
+    float limb = max(1.0 - uLimb * (1.0 - mu), 0.05);
+    float T = uStarTemp * g * tFactor * mix(1.0, gran, 0.5) * sqrt(sqrt(facBoost * pulse * limb));
 
     // Calottes polaires des etoiles a neutrons.
     float cap = uCaps * smoothstep(0.9, 0.985, abs(dot(q, magAxisBody())));
     T *= 1.0 + 0.8 * cap;
 
-    float limb = 1.0 - uLimb * (1.0 - mu);
     // Luminance bolometrique : proportionnelle a T^4 (Stefan-Boltzmann).
     float t2 = tFactor * tFactor;
     float intensity = limb * gran * t2 * t2 * facBoost * pulse * (1.0 + 2.5 * cap);
     vec3 color = blackbody(T) * intensity;
 
-    // Eruptions : plasma a ~9 000 K. Brillance relative (T_e / T)^4, sur une
-    // aire qui donne la bonne luminosite totale (calculee dans activity.cpp).
+    // Eruptions : plasma a ~9 000 K, en deux rubans paralleles de part et
+    // d'autre de la ligne d'inversion de polarite, qui s'ecartent pendant
+    // l'eruption. Brillance relative (T_e / T)^4, sur une aire qui donne la
+    // bonne luminosite totale (activity.cpp).
     if (uFlareCount > 0) {
         vec3 flareColor = blackbody(FLARE_TEMP * g);
         float ratio = FLARE_TEMP / uStarTemp;
         float contrast = ratio * ratio * ratio * ratio;
         for (int i = 0; i < MAX_FLARES; ++i) {
             if (i >= uFlareCount) break;
-            float d = 1.0 - dot(n, uFlarePos[i].xyz);
-            color += flareColor * contrast * uFlareAmp[i] * exp(-d / uFlarePos[i].w);
+            vec3 c = uFlarePos[i].xyz;
+            vec3 rel = n - c;
+            if (dot(rel, rel) > 0.25) continue;
+            vec3 ax = uFlareAxis[i].xyz;
+            float along = dot(rel, ax);
+            float across = dot(rel, cross(c, ax));
+            // Deux gaussiennes allongees d'aire totale egale a l'ancienne
+            // tache ronde : sigma_long x sigma_trav = s / 2.
+            // Rubans au plus ~5 degres de long (taille d'une region active),
+            // parsemes de noyaux brillants (pieds des boucles qui s'allument
+            // les uns apres les autres).
+            float k = sqrt(uFlarePos[i].w / 1.54);
+            float sa = min(1.6 * k, 0.09);
+            float sc = 0.77 * k * k / sa;
+            float sep = sc * (1.5 + 3.0 * uFlareAxis[i].w);
+            float a2 = along * along / (2.0 * sa * sa);
+            float c1 = (across - sep) / sc, c2 = (across + sep) / sc;
+            float knots = 0.35 + 1.3 * valueNoise(vec3(along / sa * 3.0, uFlareAxis[i].w * 4.0, float(i) * 7.1));
+            float ribbons = exp(-a2) * (exp(-0.5 * c1 * c1) + exp(-0.5 * c2 * c2)) * knots;
+            // Les rubans courent dans la plage, pas dans l'ombre des taches
+            // (le champ y est trop fort pour que les boucles s'y reconnectent).
+            ribbons *= (1.0 - 0.9 * umbra) * (1.0 - 0.5 * penumbra);
+            color += flareColor * contrast * uFlareAmp[i] * ribbons;
         }
     }
     return color * EXPOSURE;
 }
 
 // Couronne vue a cote de l'etoile : b = distance du rayon au centre,
-// m = direction du point le plus proche (repere du monde).
+// m = direction du point le plus proche.
+//  - profil radial de Baumbach (1937), mesure pendant les eclipses :
+//      I(b) / I_disque = 1e-6 (0,0532 b^-2,5 + 1,425 b^-7 + 2,565 b^-17)
+//    (le dernier terme : couronne interne, le premier : poussiere, F) ;
+//  - au minimum du cycle, longs jets coronaux pres de l'equateur ; au
+//    maximum, une couronne ronde, herissee partout ;
+//  - jets en forme de casque au-dessus des regions actives (le champ
+//    ferme des groupes de taches retient du plasma dense).
+float baumbach(float b)
+{
+    float b2 = b * b, b4 = b2 * b2, b8 = b4 * b4;
+    return 0.0532 / (b2 * sqrt(b)) + 1.425 / (b4 * b2 * b) + 2.565 / (b8 * b8 * b);
+}
+
 vec3 coronaLight(float b, vec3 m)
 {
     if (uCorona <= 0.0 || b <= 1.0 || b > 7.0) return vec3(0.0);
     vec3 q = rotateY(m, -uRotation);
-    // Jets coronaux : au minimum du cycle, de longs "casques" pres de
-    // l'equateur ; au maximum, une couronne ronde, herissee partout.
     // (q.y = sinus de la latitude ; ~ latitude pres de l'equateur.)
     float belt = exp(-q.y * q.y / 0.12);
     float n = valueNoise(q * 7.0);
     float rays = 0.45 + 0.9 * n * n;
     float shape = mix(1.0, 0.25 + 1.6 * belt, uStreamers) * rays;
-    float reach = 1.0 + 1.5 * (b - 1.0) * mix(0.3, belt, uStreamers);   // les jets portent plus loin
-    float col = shape * reach / (b * b * b);
+    // Les jets portent plus loin que la couronne ronde.
+    float reach = 1.0 + 1.5 * (b - 1.0) * mix(0.3, belt, uStreamers);
+    // Profil normalise au bord (baumbach(1) = 4,04), puis compresse : la
+    // couronne perd 10 000 fois son eclat en 2 rayons, l'oeil (et la photo
+    // d'eclipse) en voit une version adoucie.
+    float radial = pow(baumbach(b) / 4.04, 0.55);
+    float col = shape * reach * radial;
+
+    // Casques au-dessus des regions actives (un par groupe), projetes sur
+    // le ciel (direction et poids calcules sur le CPU, src/main.cpp).
+    // Au-dela de 3,5 rayons ils se fondent dans la couronne.
+    float helmets = 0.0;
+    float w = 0.02 + 0.12 / (b * b);              // large a la base, fin plus haut
+    for (int i = 0; i < MAX_SPOTS / 2; ++i) {
+        if (i >= uHelmetCount || b > 3.5) break;
+        float ang = 1.0 - dot(m, uHelmet[i].xyz);
+        if (ang > 8.0 * w) continue;              // trop loin du jet
+        helmets += uHelmet[i].w * exp(-ang / w);
+    }
+    col += helmets * 0.9 * pow(b, -1.6);
     return uCoronaTint * col * uCorona * 0.35;
+}
+
+// Chromosphere : fine couche rose (raie H-alpha) au-dessus de la surface,
+// herissee de spicules (jets de ~10 000 km qui montent et retombent en
+// quelques minutes). Epaisseur ~2 000 km, soit 0,003 rayon solaire,
+// elargie ici pour rester visible a l'ecran.
+vec3 chromosphere(float b, vec3 m)
+{
+    if (uCorona <= 0.0 || b <= 1.0) return vec3(0.0);
+    float z = b - 1.0;
+    if (z > 0.03) return vec3(0.0);
+    vec3 q = rotateY(m, -uRotation);
+    float spic = valueNoise(q * 140.0 + vec3(0.0, 0.0, uTime * 0.8));
+    float top = 0.006 + 0.012 * spic * spic;
+    float body = 1.0 - smoothstep(0.5 * top, top, z);
+    return HALPHA * body * 1.6;
 }
 
 // Protuberances et ejections le long d'un rayon droit (pos + t dir).
@@ -359,7 +501,7 @@ vec3 activityLight(vec3 pos, vec3 dir, bool hit, float tHit, out float trans, ou
             if (type < 0.5) {
                 // Rideau : sommet irregulier, fils de gaz verticaux.
                 float top = h * (1.0 - u * u * u * u) * (0.7 + 0.5 * valueNoise(vec3(u * 2.5, seed, 0.0)));
-                float body = 1.0 - smoothstep(0.75 * top, top, z);
+                float body = (1.0 - smoothstep(0.75 * top, top, z)) * (1.0 - smoothstep(0.75, 1.0, abs(u)));
                 // Eruption : le bas se detache, il ne reste qu'une arche qui monte.
                 float base = 0.6 * uPromC[i].w * top;
                 body *= smoothstep(base - 0.01, base + 0.01, z);
@@ -377,7 +519,13 @@ vec3 activityLight(vec3 pos, vec3 dir, bool hit, float tHit, out float trans, ou
         col *= fade;
         if (col <= 0.0 || t <= 0.0) continue;
         if (hit && t > tHit) continue;                        // derriere l'etoile
-        if (hit) trans *= 1.0 - clamp(0.55 * col, 0.0, 0.8); // filament sombre sur le disque
+        // Devant le disque : filament sombre (gaz froid qui absorbe). Faible en
+        // lumiere blanche, on le montre comme en H-alpha mais adouci ; les
+        // arches chaudes absorbent peu.
+        // Le rideau est une nappe mince : vu d'en haut (rayon dans son plan),
+        // on le traverse sur toute sa longueur et il dessine un filet sombre ;
+        // vu de biais, il est etale et pale (col contient deja 1 / |dn|).
+        if (hit) trans *= 1.0 - clamp((type > 0.5 ? 0.12 : 0.07) * col, 0.0, type > 0.5 ? 0.2 : 0.5);
         else { light += HALPHA * col; cover += col; }
     }
 
@@ -465,7 +613,7 @@ void main()
         float t = -b - sqrt(max(disc, 0.0));
         if (disc > 0.0 && t > 0.0) {
             vec3 p = normalize(pos + t * dir);
-            color = surface(p, clamp(dot(p, -dir), 0.0, 1.0));
+            color = surface(p, clamp(dot(p, -dir), 0.0, 1.0), -dir);
             hit = true;
             tHit = t;
         }
@@ -519,8 +667,9 @@ void main()
             float cc = dot(prev, prev) - 1.0;
             float t = (-b - sqrt(max(b * b - 4.0 * a * cc, 0.0))) / (2.0 * a);
             vec3 p = normalize(prev + clamp(t, 0.0, 1.0) * d);
-            float mu = clamp(dot(p, -normalize(vel)), 0.0, 1.0);
-            color = surface(p, mu);
+            vec3 toCam = -normalize(vel);
+            float mu = clamp(dot(p, toCam), 0.0, 1.0);
+            color = surface(p, mu, toCam);
             hit = true;
             break;
         }
@@ -540,7 +689,8 @@ void main()
         color = glow + sky * 0.6;
         if (straight) {
             vec3 closest = pos - dot(pos, dir) * dir;
-            color += coronaLight(rMin, normalize(closest + vec3(0.0, 1e-5, 0.0))) * EXPOSURE;
+            vec3 m = normalize(closest + vec3(0.0, 1e-5, 0.0));
+            color += (coronaLight(rMin, m) + chromosphere(rMin, m)) * EXPOSURE;
         }
         // Sursaut de magnetar : tout l'environnement s'illumine un instant.
         color += vec3(0.7, 0.5, 1.0) * burst * 0.08 * exp(-above * 0.8);

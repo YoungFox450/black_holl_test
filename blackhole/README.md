@@ -24,6 +24,7 @@ blackhole/
 └── src/
     ├── main.cpp           fenêtre, caméra orbitale, boucle de rendu
     ├── activity.cpp/.hpp  activité des étoiles (taches, cycle, éruptions)
+    ├── regions.cpp/.hpp   régions actives (groupes de taches bipolaires)
     ├── ui_activity.cpp    cartes « activité » du panneau
     └── shader.cpp/.hpp    compilation des shaders
 ```
@@ -155,7 +156,14 @@ de la rotation, comme pour les vraies étoiles.
 ![Activité](docs/activite.jpg)
 
 *Le Soleil près du maximum de son cycle (taches aux latitudes moyennes) et
-Proxima du Centaure pendant une éruption.*
+Proxima du Centaure (protubérances au bord, taches sombres).*
+
+![Régions actives](docs/regions.jpg)
+
+*Le Soleil, un groupe de taches bipolaire, puis le même en magnétogramme
+(touche `Y` : blanc = champ sortant, noir = rentrant, loi de Hale) ; à
+droite une étoile jeune qui tourne vite (0,6 jour, comme AB Doradus), avec
+une grande tache et une éruption en deux rubans à côté.*
 
 | Effet | Modèle |
 |---|---|
@@ -163,12 +171,18 @@ Proxima du Centaure pendant une éruption.*
 | Rotation → activité | nombre de Rossby `Ro = P_rot / τ_c`, avec `log τ_c = 2,33 − 1,50 M + 0,31 M²` (Wright 2018), ~150 j pour les géantes ; `L_X / L_bol = 10^-3,13 (Ro / 0,13)^-2,7`, plafonné sous Ro = 0,13 (Wright 2011) |
 | Rotation des étoiles créées | gyrochronologie à 4,6 milliards d'années, `P = 0,7725 (B−V − 0,4)^0,601 t^0,519` (Barnes 2007) : 27 j pour 1 M☉, ~95 j pour une naine M |
 | Surface tachée | `f = 0,4 (L_X / L_X,sat)^0,84`, calé entre le Soleil (~0,1 %) et les naines M saturées (~40 %) |
-| Taches | ombre et pénombre, `ΔT ≈ 0,6 T − 1780 K` (Berdyugina 2005), brillance `(T_tache / T)⁴` ; durée de vie de Gnevyshev-Waldmeier (~30 j) |
-| Facules | aire `0,55 √f`, contraste nul au centre et ~15 % au bord |
+| Régions actives | les taches naissent par paires de polarités opposées (`src/regions.cpp`) ; nombre de groupes `1 + 3 log₁₀(f / 2·10⁻⁵)` (12 au plus), aires log-normales σ = 0,8 (Bogdan 1988), tache de tête = 60 % de l'aire, écart ≈ 4 rayons de la tête |
+| Loi de Joy | axe du groupe incliné de `γ = 32,1° sin λ` (λ : latitude, en valeur absolue) (Stenflo & Kosovichev 2012), la tête plus près de l'équateur |
+| Loi de Hale | polarité de tête opposée au nord et au sud, inversée à chaque cycle ; visible avec le magnétogramme (touche `Y`, champ `B cos θ` comme l'instrument HMI) |
+| Vie d'un groupe | émergence en quelques jours puis décroissance de 10 MSH/jour (Gnevyshev-Waldmeier) ; chaque tache tourne à la vitesse de sa latitude, le groupe se déforme |
+| Taches | ombre (rayon 0,42 × la tache) et pénombre filamentaire, `ΔT ≈ 0,6 T − 1780 K` (Berdyugina 2005), brillance `(T_tache / T)⁴` ; dépression de Wilson : vue de biais, l'ombre se décale vers le centre du disque |
+| Facules | plages autour des taches, qui restent après elles ; aire `0,55 √f` (Shapiro 2014), contraste nul au centre et ~25 % au bord |
+| Bord du disque | assombrissement `1 − u (1 − μ)` et bord plus rouge : on y voit des couches plus froides, `T(μ)⁴ ∝ I(μ)` (Eddington-Barbier) |
+| Granulation | cellules de Worley dont la taille suit la gravité (géantes : quelques cellules géantes) ; fondues en un léger moutonnement quand elles sont plus petites que le pixel |
 | Cycle | période `≈ 158 P_rot` (11 ans pour le Soleil, Böhm-Vitense 2007), forme de Hathaway (1994) ; absent pour les étoiles saturées |
 | Diagramme papillon | loi de Spörer `λ = 28° exp(−t / 90 mois)` (Hathaway 2011), le cycle suivant commence à haute latitude pendant que le précédent finit à l'équateur ; taches vers les pôles pour les rotateurs rapides |
 | Rotation différentielle | `Ω(λ) = Ω_eq (1 − α sin² λ)`, `ΔΩ = 0,073 rad/j (T / 5772 K)^8,6` (Collier Cameron 2007) |
-| Éruptions | processus de Poisson, fréquence ∝ L_X (calée sur GJ 1243), énergies `dN/dE ∝ E^-2`, profil de Davenport (2014), plasma à 9 000 K : `L_pic = E / (1,827 t½)`, `t½ ∝ E^0,39` |
+| Éruptions | processus de Poisson, fréquence ∝ L_X (calée sur GJ 1243), énergies `dN/dE ∝ E^-2`, profil de Davenport (2014), plasma à 9 000 K : `L_pic = E / (1,827 t½)`, `t½ ∝ E^0,39` ; elles partent des groupes de taches (les plus grands plus souvent), en deux rubans de part et d'autre de la ligne d'inversion de polarité qui s'écartent pendant l'éruption |
 | Oscillations | `ν_max = 3090 µHz (g/g☉)(T/T☉)^-½`, `Δν = 135 µHz √ρ`, `δL/L = 4,7 ppm (L/M)^0,8` (Kjeldsen & Bedding 1995) : ~100 jours et 0,5 % pour Bételgeuse |
 
 | Étoile | Ro | Surface tachée | Cycle | Éruptions / jour |
@@ -202,10 +216,11 @@ brillant, cavité, cœur rose) et une petite protubérance au bord.*
 
 | Effet | Modèle |
 |---|---|
-| Couronne | flux X `F_X = (L_X/L_bol) σT⁴`, température `T = 0,11 F_X^0,26` MK (Johnstone & Güdel 2015) : 1,7 MK pour le Soleil, ~10 MK pour une naine très active ; lumière de l'étoile diffusée par les électrons (densité en r⁻⁴) ; jets coronaux équatoriaux au minimum du cycle, couronne ronde au maximum. Renforcée pour être visible (en vrai un millionième de la surface) |
+| Couronne | flux X `F_X = (L_X/L_bol) σT⁴`, température `T = 0,11 F_X^0,26` MK (Johnstone & Güdel 2015) : 1,7 MK pour le Soleil, ~10 MK pour une naine très active ; profil d'éclat de Baumbach (1937) `I ∝ 0,0532 b^-2,5 + 1,425 b^-7 + 2,565 b^-17` ; jets coronaux équatoriaux au minimum du cycle, couronne ronde au maximum, casques au-dessus des groupes de taches. Renforcée pour être visible (en vrai un millionième de la surface) |
+| Chromosphère | mince couche rose (raie Hα) au bord, hérissée de spicules |
 | Ligne de partage coronale | les géantes plus froides que ~K3 (Bételgeuse, Aldébaran) n'ont pas de couronne chaude (Linsky & Haisch 1979) |
 | Vent | naines : vent de Parker isotherme, `Ṁ ∝ R² F_X^1,34` (Wood 2005), réduit au-delà de F_X = 10⁶ ; géantes froides : loi de Reimers `Ṁ = 2·10⁻¹³ L R / M` ; étoiles chaudes : vent poussé par la lumière, `v∞ = 2,6 v_esc` (Lamers 1995) |
-| Protubérances | de 1 à 6 selon l'aire tachée ; rideaux calmes (hauts, longs, des semaines), arches actives au-dessus des taches (quelques jours), « couronne polaire » ; roses au bord (raie Hα), filaments sombres devant le disque |
+| Protubérances | de 1 à 6 selon l'aire tachée ; rideaux calmes (hauts, longs, des semaines), souvent le long de la ligne d'inversion d'un groupe ; arches actives qui relient les deux taches d'un groupe (quelques jours) ; « couronne polaire » ; roses au bord (raie Hα), filets sombres devant le disque |
 | Nuages en corotation | si le rayon de corotation `(G M P² / 4π²)^1/3` est à moins de 6 rayons (rotateurs rapides comme AB Doradus), nuages froids piégés qui tournent avec l'étoile puis sont éjectés (Collier Cameron & Robinson 1989) |
 | Éjections de masse coronale | ~2,5 par jour pour le Soleil (Yashiro 2004), ∝ F_X^0,7 ; 60 % viennent d'une protubérance qui éclate (« disparition brusque ») ; structure en 3 parties ; vitesses log-normales, médiane ~450 km/s ; une partie retombe sur les étoiles très actives (confinement, Alvarado-Gómez 2018) |
 
@@ -310,7 +325,8 @@ De haut en bas :
     fins, et ce que la physique en déduit (luminosité, gravité, compacité) ;
   - activité de l'étoile (`src/ui_activity.cpp`) : nombre de Rossby,
     rayons X, rotation différentielle, phase du cycle (réglable), surface
-    tachée, latitude des taches, éruptions en cours, oscillations.
+    tachée, latitude des taches, régions actives (nombre, polarités de
+    Hale, magnétogramme), éruptions en cours, oscillations.
 - **Onglet Vue** : distance, angles, champ de vision, orbite automatique
   (et sa vitesse), sensibilité de la souris ; carte Simulation
   (`src/ui_simulation.cpp`) : lentille gravitationnelle à couper pour
@@ -366,6 +382,7 @@ Les lettres marchent en AZERTY comme en QWERTY.
 | `I` / `U` | étoile de la séquence principale plus / moins massive (×1,25) |
 | `J` | jets relativistes du trou noir (quasar) |
 | `M` | éjection de masse coronale (étoile active) |
+| `Y` | magnétogramme : champ magnétique des taches (étoile active) |
 | `V` | lentille gravitationnelle (la couper : la lumière va tout droit) |
 | `F` | ajouter un champ d'astéroïdes (réglages du panneau) |
 | `G` | ajouter un astéroïde en orbite circulaire |

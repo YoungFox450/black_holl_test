@@ -110,7 +110,7 @@ void prominenceCard(App& app)
     info("Lancées / retenues", nullptr, "%d / %d", sim.cmeTotal(), sim.cmeFailed());
     if (ui::button("Lancer une éjection (M)", true)) {
         const double days = starDays(app);
-        app.corona.launchCme(app.star, act, days, starRotationAngle(app.star, days));
+        app.corona.launchCme(app.star, act, days, starRotationAngle(app.star, days), &app.regions);
     }
     ui::note("Le temps est accéléré : une éjection met en vrai des heures à "
              "quitter l'étoile, ici quelques secondes. Seules les plus grosses sont "

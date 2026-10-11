@@ -1,5 +1,5 @@
 // Cartes « activité de l'étoile » du panneau : dynamo, cycle et taches,
-// éruptions, oscillations. Les grandeurs viennent de src/activity.cpp.
+// régions actives, éruptions, oscillations. Les grandeurs viennent de src/activity.cpp.
 
 #include "ui_kit.hpp"
 
@@ -138,6 +138,36 @@ void flareCard(App& app)
     info("En cours / total", nullptr, "%d / %d", app.flares.count(), app.flares.total());
 }
 
+void regionCard(App& app)
+{
+    const StellarActivity act = computeActivity(app.star);
+    const ActiveRegionSimulator& reg = app.regions;
+    const double days = starDays(app);
+    info("Groupes de taches", "Les taches naissent par paires de polarités opposées "
+         "(régions actives bipolaires). Leur nombre suit la surface tachée ; aires "
+         "en loi log-normale (Bogdan et al. 1988).", "%d  (%d nés en tout)", reg.count(), reg.total());
+    info("Aire tachée maintenant", "Somme des aires des groupes. Chaque groupe émerge en "
+         "quelques jours puis perd ~10 MSH par jour (Gnevyshev-Waldmeier). "
+         "1 MSH = un millionième d'hémisphère.", "%.2g %%", 100.0 * reg.totalArea(days));
+    if (act.cycleYears > 0.0) {
+        const int n = cycleNumber(app, act);
+        info("Tête au nord", "Polarité de la tache de tête dans l'hémisphère nord (+ : champ sortant). Loi de Hale : la tache de tête (vers l'ouest) a "
+             "des polarités opposées dans les deux hémisphères, et tout s'inverse à "
+             "chaque cycle (cycle magnétique de 2 x P_cyc).", "%s  (cycle %d)",
+             n % 2 == 0 ? "+" : "-", n);
+    }
+    info("Inclinaison à 20°", "Loi de Joy : l'axe du groupe penche de 32,1° sin|lat| "
+         "(Stenflo & Kosovichev 2012), la tête plus près de l'équateur.", "%.1f°",
+         32.1 * std::sin(20.0 * 3.14159265358979 / 180.0));
+    info("Cisaillement", "La rotation différentielle étire les groupes : la tache la "
+         "plus proche de l'équateur prend de l'avance. Les éruptions naissent sur la "
+         "ligne qui sépare les polarités, en deux rubans qui s'écartent.",
+         "%.2g °/jour", act.shearRatio * 360.0 / std::max(app.star.rotationDays, 1e-6));
+    ui::toggle("Magnétogramme (Y)", &app.showMagnetogram, "Champ magnétique le long de la "
+               "ligne de visée, comme l'instrument HMI : blanc = champ sortant, noir = "
+               "rentrant, gris = pas de champ. Il faiblit vers le bord (B cos theta).");
+}
+
 void oscillationCard(App& app)
 {
     const StellarActivity act = computeActivity(app.star);
@@ -154,5 +184,6 @@ void oscillationCard(App& app)
 
 UI_SECTION(ui::Tab::Object, 50, "Activité magnétique", dynamoCard, isStar);
 UI_SECTION(ui::Tab::Object, 60, "Cycle et taches", cycleCard, hasDynamo);
+UI_SECTION(ui::Tab::Object, 65, "Régions actives", regionCard, hasDynamo);
 UI_SECTION(ui::Tab::Object, 70, "Éruptions", flareCard, hasDynamo);
 UI_SECTION(ui::Tab::Object, 80, "Oscillations", oscillationCard, oscillates);

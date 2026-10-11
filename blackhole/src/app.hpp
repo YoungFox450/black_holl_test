@@ -6,6 +6,7 @@
 #include "activity.hpp"
 #include "asteroids.hpp"
 #include "corona.hpp"
+#include "regions.hpp"
 #include "binary.hpp"
 #include "star.hpp"
 
@@ -121,6 +122,8 @@ struct App {
     // Activité de l'étoile (src/activity.cpp) : éruptions en cours et
     // décalage de phase du cycle magnétique (réglable dans le panneau).
     FlareSimulator flares;
+    ActiveRegionSimulator regions;   // groupes de taches (src/regions.cpp)
+    bool showMagnetogram = false;    // surface vue comme un magnétogramme
     // Protubérances, éjections de masse coronale et couronne (src/corona.cpp).
     CoronaSimulator corona;
     bool showCorona = true;
@@ -171,17 +174,18 @@ inline double starDays(const App& app)
     return app.simTime / 10.0 * kStarDaysPerSecond;
 }
 
-// Vitesse de rotation affichée de l'étoile (rad/jour), bornée pour les
-// objets qui tournent très vite (sinon la rotation crénelle à l'écran).
-inline double displayOmega(const Star& star)
-{
-    return std::min(6.283185307 / std::max(star.rotationDays, 1e-9), 1.5);
-}
-
 // Angle de rotation affiché de l'équateur au temps `days`.
 inline double starRotationAngle(const Star& star, double days)
 {
     return std::fmod(displayOmega(star) * days, 6.283185307179586);
+}
+
+// Numéro du cycle magnétique en cours (sa parité donne les polarités des
+// taches, loi de Hale). 0 si l'étoile n'a pas de cycle régulier.
+inline int cycleNumber(const App& app, const StellarActivity& act)
+{
+    if (act.cycleYears <= 0.0) return 0;
+    return int(std::floor(starDays(app) / (act.cycleYears * 365.25) + app.cyclePhaseOffset));
 }
 
 // Phase (0..1) du cycle magnétique de l'étoile.
@@ -253,6 +257,7 @@ inline void selectPreset(App& app, int index)
     app.starIndex = ((index % n) + n) % n;
     app.star = presets[app.starIndex];
     app.flares.clear();
+    app.regions.clear();
     app.corona.clear();
     std::cout << app.star.summary() << "\n";
 }
@@ -264,6 +269,7 @@ inline void setCustomStar(App& app, const Star& star)
     app.starIndex = -1;
     app.star = star;
     app.flares.clear();
+    app.regions.clear();
     app.corona.clear();
 }
 
@@ -272,6 +278,7 @@ inline void selectMainSequence(App& app, double mass)
     app.starIndex = -1;
     app.star = mainSequenceStar(mass);
     app.flares.clear();
+    app.regions.clear();
     app.corona.clear();
     std::cout << app.star.summary() << "\n";
 }
