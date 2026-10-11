@@ -63,6 +63,7 @@ const Binding kBindings[] = {
     {"Rendu", {"K", "L", nullptr}, "baisser / monter la résolution", "Coupe la résolution automatique."},
     {"Rendu", {"O", nullptr}, "résolution automatique", "Ajuste la résolution pour tenir les images par seconde visées."},
     {"Rendu", {"R", nullptr}, "recharger les shaders", "Après une modification des fichiers .frag."},
+    {"Rendu", {"F12", nullptr}, "capture d'écran", "Image BMP dans le dossier captures, à côté de l'endroit où le programme est lancé."},
 
     {"Application", {"F1", "Tab", nullptr}, "afficher / cacher le panneau", nullptr},
     {"Application", {"Échap", nullptr}, "quitter", nullptr},

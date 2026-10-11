@@ -65,6 +65,7 @@ add_executable(blackhole
     src/ui_compact.cpp
     src/ui_asteroids.cpp
     src/ui_simulation.cpp
+    src/ui_realism.cpp
     src/ui_keys.cpp
     src/corona.cpp
     src/regions.cpp

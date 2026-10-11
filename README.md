@@ -32,6 +32,13 @@ finit, le pixel prend la couleur :
   gravitationnel vers le rouge.
 - On voit le dessus **et** le dessous du disque autour de l'ombre (lumière de
   l'arrière du disque courbée par le trou noir).
+- **Réalisme** (onglet Rendu, carte « Réalisme ») : retard de la lumière
+  (l'image du disque au-dessus de l'ombre est en retard sur l'image
+  principale), ciel et disque plus bleus quand la caméra s'approche du trou
+  noir, gaz qui plonge en spirale sous l'ISCO, repères de la sphère de
+  photons et de l'ISCO, dilatation du temps de la caméra, halo lumineux,
+  exposition automatique, image lissée en pause (moyenne de 64 images) et
+  capture d'écran (`F12`, dossier `captures/`).
 - Caméra libre avec inertie, orbite automatique, pause et vitesse du temps.
 - Résolution de rendu réglée automatiquement pour tenir ~30 FPS.
 - **Simulation d'étoiles** (touche `E`) : Soleil, Proxima du Centaure,
@@ -151,6 +158,7 @@ Le détail par système (paquets Linux, macOS) est dans
 | `T` | avancer d'un pas pendant la pause |
 | `H` | afficher / cacher le disque |
 | `F1` ou `Tab` | afficher / cacher le panneau de contrôle |
+| `F12` | capture d'écran (BMP dans `captures/`) |
 | `E` | passer du trou noir à une étoile, et retour |
 | `N` / `B` | étoile suivante / précédente |
 | `J` | jets relativistes (quasar) |
@@ -199,7 +207,8 @@ Les détails et les mesures sont dans
     │   ├── star.frag         ray tracing d'une étoile, pulsar, magnétar
     │   ├── asteroid.vert/.frag  astéroïdes dessinés en points
     │   ├── gas.vert/.frag    gaz arraché à l'étoile compagne
-    │   ├── present.frag      agrandissement et tone mapping
+    │   ├── present.frag      agrandissement, halo, exposition et tone mapping
+    │   ├── accumulate.frag   image lissée en pause (moyenne d'images)
     │   ├── noise.glsl        fonctions de bruit partagées
     │   └── fullscreen.vert   triangle plein écran
     └── src/
@@ -212,6 +221,7 @@ Les détails et les mesures sont dans
         ├── ui_asteroids.cpp  cartes des astéroïdes
         ├── ui_keys.cpp       onglet Touches et messages des touches
         ├── ui_simulation.cpp carte Simulation (lentille, pause, pas à pas)
+        ├── ui_realism.cpp    carte Réalisme (effets relativistes, halo, capture)
         ├── star.cpp/.hpp     modèles physiques des étoiles et étoiles à neutrons
         ├── activity.cpp/.hpp activité magnétique : taches, cycle, éruptions
         ├── regions.cpp/.hpp  régions actives : groupes de taches bipolaires
@@ -244,11 +254,12 @@ La physique (équation des photons, horizon, disque, Doppler, modèle des
 | 11. Système double | Étoile compagne déformée par la marée, gaz arraché par le point L1 jusqu'au disque, anneau d'Einstein |
 | 12. Couronne et vent | Couronne, protubérances, éjections de masse coronale (`M`) et vent stellaire déduits de l'activité de l'étoile |
 | 13. Quasar plus rapide | Pas courts seulement près de l'axe des jets : mode quasar 35 % plus rapide (85 → 55 ms par image en 960x540), même rendu |
+| 14. Réalisme | Retard de la lumière, ciel bleui près du trou noir, gaz sous l'ISCO, repères, halo, exposition automatique, image lissée en pause, capture `F12` |
 
 ## Pistes pour la suite
 
 - Trou noir en rotation (métrique de Kerr) : ombre asymétrique.
-- Anti-aliasing (plusieurs rayons par pixel) et bloom autour du disque.
+- Anti-aliasing aussi pendant le mouvement (accumulation temporelle).
 
 ## Régénérer les images de ce README
 
