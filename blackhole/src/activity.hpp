@@ -71,6 +71,15 @@ struct StellarActivity {
 
 StellarActivity computeActivity(const Star& star);
 
+// Vitesse de rotation affichée de l'étoile (rad/jour), bornée pour les
+// objets qui tournent très vite (sinon la rotation crénelle à l'écran).
+inline double displayOmega(const Star& star)
+{
+    double p = star.rotationDays > 1e-9 ? star.rotationDays : 1e-9;
+    double w = 6.283185307 / p;
+    return w < 1.5 ? w : 1.5;
+}
+
 // État du cycle à une phase donnée (0..1 = un cycle).
 struct CycleState {
     double level = 1.0;            // activité / moyenne
@@ -79,11 +88,6 @@ struct CycleState {
 };
 CycleState cycleState(const StellarActivity& act, double phase);
 
-// Mesurée sur le bruit fbm(3 octaves) de shaders/noise.glsl : valeur dépassée
-// par une fraction 10^-k des points, k = 0 ; 0,5 ; 1 ; ... ; 4.
-constexpr std::array<float, 9> kSpotNoiseQuantiles = {
-    0.0826f, 0.4808f, 0.5599f, 0.6222f, 0.6624f, 0.6875f, 0.7012f, 0.7118f, 0.7226f};
-
 // Éruptions en cours, simulées sur le CPU (processus de Poisson).
 struct Flare {
     double latitude = 0.0, longitude = 0.0; // radians, repère tournant
@@ -91,15 +95,22 @@ struct Flare {
     double halfSeconds = 1.0;    // largeur à mi-hauteur affichée (secondes)
     double peakRatio = 0.0;      // L_pic / L_bol
     double areaFraction = 0.0;   // aire / surface de l'étoile
+    // Direction des rubans sur la surface (0 = est-ouest, rad) : le long de
+    // la ligne d'inversion de polarité, perpendiculaire à l'axe du groupe.
+    double ribbonAngle = 1.5707963;
 };
+
+class ActiveRegionSimulator;
 
 class FlareSimulator {
 public:
     static constexpr int kMax = 4;
 
     // Avance la simulation jusqu'au temps `days` (cycle : niveau d'activité).
+    // regions : les éruptions éclatent dans les régions actives, d'autant
+    // plus souvent que la région est grande (nullptr : bandes de taches).
     void update(const Star& star, const StellarActivity& act, const CycleState& cyc,
-                double days);
+                double days, const ActiveRegionSimulator* regions = nullptr);
     void clear();
 
     // Intensité relative du profil de Davenport (2014) au temps `days`.
@@ -112,7 +123,9 @@ public:
 
 private:
     double uniform();
-    void spawn(const Star& star, const StellarActivity& act, const CycleState& cyc, double days);
+    void push(const Flare& f, double days);
+    void spawn(const Star& star, const StellarActivity& act, const CycleState& cyc, double days,
+               const ActiveRegionSimulator* regions);
 
     std::array<Flare, kMax> flares_{};
     int count_ = 0;

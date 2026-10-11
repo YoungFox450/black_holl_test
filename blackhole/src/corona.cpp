@@ -179,7 +179,8 @@ double CoronaSimulator::cmeBrightness(const Cme& c, double days) const
 }
 
 void CoronaSimulator::spawnProminence(const Star& star, const StellarActivity& act,
-                                      const CoronaModel& cor, const CycleState& cyc, double days)
+                                      const CoronaModel& cor, const CycleState& cyc, double days,
+                                      const ActiveRegionSimulator* regions)
 {
     if (promCount_ >= kMaxProminences) return;
     Prominence p;
@@ -198,6 +199,26 @@ void CoronaSimulator::spawnProminence(const Star& star, const StellarActivity& a
         p.height = std::clamp(cor.corotationRadius - 1.0, 0.3, 5.0) * (0.85 + 0.3 * uniform());
         p.halfLength = 0.2 + 0.15 * uniform();       // taille du nuage (rayons)
         p.lifeDays = rot * (4.0 + 8.0 * uniform());
+    } else if (u < 0.55 && regions && regions->count() > 0) {
+        // Arche au-dessus d'un groupe de taches : la boucle de champ relie la
+        // tache de tête à celle de queue (polarités opposées). Hauteur d'une
+        // boucle demi-circulaire : la moitié de l'écart entre les pieds.
+        const ActiveRegion& r = regions->regions()[regions->pick(uniform(), days)];
+        p.type = 1;
+        double clat, clon;
+        regions->center(r, clat, clon);
+        p.latitude = clat;
+        p.longitude = regions->equatorFrameLongitude(clat, clon, days);
+        p.orientation = regions->axisAngle(r, days);
+        double dlat = r.lat[1] - r.lat[0];
+        double dlon = (regions->equatorFrameLongitude(r.lat[1], r.lon[1], days) -
+                       regions->equatorFrameLongitude(r.lat[0], r.lon[0], days)) * std::cos(clat);
+        double sep = std::sqrt(dlat * dlat + dlon * dlon);
+        p.halfLength = std::clamp(0.5 * sep, 0.02, 0.3);
+        p.height = std::clamp(0.5 * sep, 0.015, 0.25);
+        p.lifeDays = std::clamp(0.5 * (r.lifeDays - (days - r.bornDays)), 2.0, 20.0);
+        proms_[promCount_++] = p;
+        return;
     } else if (u < 0.55) {
         // Protubérance active, basse et courte, au-dessus des taches.
         p.type = 1;
@@ -206,6 +227,21 @@ void CoronaSimulator::spawnProminence(const Star& star, const StellarActivity& a
         p.height = 0.025 + 0.05 * uniform();
         p.halfLength = 0.04 + 0.08 * uniform();
         p.lifeDays = 3.0 + 8.0 * uniform();
+    } else if (regions && regions->count() > 0 && uniform() < 0.5) {
+        // Filament le long de la ligne d'inversion d'un groupe qui vieillit :
+        // perpendiculaire à l'axe tête-queue, entre les deux polarités.
+        const ActiveRegion& r = regions->regions()[regions->pick(uniform(), days)];
+        p.type = 0;
+        double clat, clon;
+        regions->center(r, clat, clon);
+        p.latitude = clat;
+        p.longitude = regions->equatorFrameLongitude(clat, clon, days);
+        p.orientation = regions->axisAngle(r, days) + 0.5 * kPi;
+        p.height = 0.04 + 0.08 * uniform();
+        p.halfLength = 0.06 + 0.12 * uniform();
+        p.lifeDays = 10.0 + 30.0 * uniform();
+        proms_[promCount_++] = p;
+        return;
     } else {
         // Protubérance calme : longue et haute, dans les bandes ou vers les
         // pôles (« couronne polaire », qui monte vers les pôles au maximum).
@@ -265,7 +301,7 @@ void CoronaSimulator::addCme(const Star& star, const StellarActivity& act, doubl
 }
 
 void CoronaSimulator::launchCme(const Star& star, const StellarActivity& act, double days,
-                                double rotation)
+                                double rotation, const ActiveRegionSimulator* regions)
 {
     if (!computeCorona(star, act).active) return;
     // La protubérance la plus haute qui n'éclate pas encore part la première.
@@ -277,12 +313,30 @@ void CoronaSimulator::launchCme(const Star& star, const StellarActivity& act, do
         proms_[best].launchesCme = true;
         return;   // la CME part quand l'éruption est lancée (update)
     }
-    double lat = (uniform() - 0.5) * 1.0;
+    double lat, lon;
+    if (regionSite(star, regions, days, lat, lon)) {
+        addCme(star, act, lat, lon, days, rotation);
+        return;
+    }
+    lat = (uniform() - 0.5) * 1.0;
     addCme(star, act, lat, 2.0 * kPi * uniform(), days, rotation);
 }
 
+bool CoronaSimulator::regionSite(const Star& /*star*/, const ActiveRegionSimulator* regions, double days,
+                                 double& lat, double& lon)
+{
+    if (!regions) return false;
+    int i = regions->pick(uniform(), days);
+    if (i < 0) return false;
+    double clon;
+    regions->center(regions->regions()[i], lat, clon);
+    // Repère qui tourne avec l'équateur (convention des protubérances).
+    lon = regions->equatorFrameLongitude(lat, clon, days);
+    return true;
+}
+
 void CoronaSimulator::update(const Star& star, const StellarActivity& act, const CycleState& cyc,
-                             double days, double rotation)
+                             double days, double rotation, const ActiveRegionSimulator* regions)
 {
     const CoronaModel cor = computeCorona(star, act);
     if (!cor.active) {
@@ -306,7 +360,7 @@ void CoronaSimulator::update(const Star& star, const StellarActivity& act, const
     if (restart) {
         // Remplissage immédiat, avec des âges au hasard.
         for (int i = 0; i < target; ++i) {
-            spawnProminence(star, act, cor, cyc, days);
+            spawnProminence(star, act, cor, cyc, days, regions);
             Prominence& p = proms_[promCount_ - 1];
             double age = uniform() * 0.7 * p.lifeDays;
             p.bornDays -= age;
@@ -315,7 +369,7 @@ void CoronaSimulator::update(const Star& star, const StellarActivity& act, const
     } else if (promCount_ < target) {
         // Naissances : une à la fois, environ une par durée de vie / cible.
         double rate = target / (cor.slingshot ? 3.0 : 12.0);   // par jour
-        if (uniform() < 1.0 - std::exp(-rate * dt)) spawnProminence(star, act, cor, cyc, days);
+        if (uniform() < 1.0 - std::exp(-rate * dt)) spawnProminence(star, act, cor, cyc, days, regions);
     }
 
     // Éruptions de protubérances -> CME, et fin de vie.
@@ -347,9 +401,14 @@ void CoronaSimulator::update(const Star& star, const StellarActivity& act, const
             proms_[pick].eruptDays = days + 1e-3;
             proms_[pick].launchesCme = true;
         } else {
-            int band = uniform() < cyc.bandWeight[0] ? 0 : 1;
-            double lat = (cyc.bandLatDeg[band] + 8.0 * gaussian()) * kPi / 180.0;
-            addCme(star, act, uniform() < 0.5 ? lat : -lat, 2.0 * kPi * uniform(), days, rotation);
+            double lat, lon;
+            if (regionSite(star, regions, days, lat, lon)) {
+                addCme(star, act, lat, lon, days, rotation);
+            } else {
+                int band = uniform() < cyc.bandWeight[0] ? 0 : 1;
+                lat = (cyc.bandLatDeg[band] + 8.0 * gaussian()) * kPi / 180.0;
+                addCme(star, act, uniform() < 0.5 ? lat : -lat, 2.0 * kPi * uniform(), days, rotation);
+            }
         }
         nextCme_ = days - std::log(1.0 - uniform()) / rate;
     }

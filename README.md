@@ -39,8 +39,10 @@ finit, le pixel prend la couleur :
   étoile créée à partir de sa masse. Couleur de corps noir, bord assombri,
   granulation et lentille gravitationnelle pour les objets compacts.
 - **Activité des étoiles** calculée à partir de la rotation et du type
-  d'étoile, sans réglage à la main : taches avec ombre et pénombre, facules,
-  cycle magnétique et loi de Spörer, rotation différentielle, éruptions,
+  d'étoile, sans réglage à la main : groupes de taches bipolaires (lois de
+  Joy et de Hale), ombre, pénombre filamentaire et dépression de Wilson,
+  facules, magnétogramme (touche `Y`), cycle magnétique et loi de Spörer,
+  rotation différentielle, éruptions en deux rubans,
   oscillations de luminosité. Les étoiles qui tournent vite sont les plus
   actives (nombre de Rossby).
   Les étoiles peu compactes sont tracées en ligne droite (la déviation y est
@@ -153,6 +155,7 @@ Le détail par système (paquets Linux, macOS) est dans
 | `N` / `B` | étoile suivante / précédente |
 | `J` | jets relativistes (quasar) |
 | `M` | éjection de masse coronale (étoile active) |
+| `Y` | magnétogramme : champ magnétique des taches (étoile active) |
 | `V` | lentille gravitationnelle (marche / arrêt) |
 | `F` / `G` / `X` | champ d'astéroïdes, un astéroïde, tout retirer |
 | `K` / `L` / `O` | baisser, augmenter la résolution, ou la laisser automatique |
@@ -211,6 +214,7 @@ Les détails et les mesures sont dans
         ├── ui_simulation.cpp carte Simulation (lentille, pause, pas à pas)
         ├── star.cpp/.hpp     modèles physiques des étoiles et étoiles à neutrons
         ├── activity.cpp/.hpp activité magnétique : taches, cycle, éruptions
+        ├── regions.cpp/.hpp  régions actives : groupes de taches bipolaires
         ├── asteroids.cpp/.hpp  orbites, capture, marées, fonte des astéroïdes
         ├── binary.cpp/.hpp   système double : orbite, marée, transfert de gaz
         ├── binary_gfx.cpp/.hpp  dessin du gaz

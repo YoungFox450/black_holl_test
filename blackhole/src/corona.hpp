@@ -24,6 +24,7 @@
 //      partie (confinement, Alvarado-Gómez et al. 2018).
 
 #include "activity.hpp"
+#include "regions.hpp"
 #include "star.hpp"
 
 #include <array>
@@ -73,12 +74,15 @@ public:
 
     // Avance jusqu'au temps `days`. `rotation` : angle de rotation affiché
     // de l'étoile (pour lancer les CME dans la bonne direction).
+    // regions : les arches relient les deux taches d'un groupe, les
+    // filaments suivent sa ligne d'inversion, les éjections en partent.
     void update(const Star& star, const StellarActivity& act, const CycleState& cyc,
-                double days, double rotation);
+                double days, double rotation, const ActiveRegionSimulator* regions = nullptr);
     void clear();
     // Lance tout de suite une éjection (touche M) : la protubérance la
     // plus haute éclate, ou une bulle part d'une région active.
-    void launchCme(const Star& star, const StellarActivity& act, double days, double rotation);
+    void launchCme(const Star& star, const StellarActivity& act, double days, double rotation,
+                   const ActiveRegionSimulator* regions = nullptr);
 
     // Hauteur et luminosité d'une protubérance (éruption : elle monte et pâlit).
     double heightAt(const Prominence& p, double days) const;
@@ -100,8 +104,10 @@ private:
     double uniform();
     double gaussian();
     void spawnProminence(const Star& star, const StellarActivity& act, const CoronaModel& cor,
-                         const CycleState& cyc, double days);
+                         const CycleState& cyc, double days, const ActiveRegionSimulator* regions);
     bool recentCme(double days) const;
+    bool regionSite(const Star& star, const ActiveRegionSimulator* regions, double days, double& lat,
+                    double& lon);
     void addCme(const Star& star, const StellarActivity& act, double lat, double lon, double days,
                 double rotation);
 
